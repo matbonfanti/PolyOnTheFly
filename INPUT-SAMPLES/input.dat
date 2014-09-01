@@ -1,0 +1,42 @@
+# INPUT FILE for PolyOnTheFly
+
+# Input units definition
+# length - Angstrom
+InputLength : 1
+# energy - eV
+InputEnergy : 3
+# mass - AMU
+InputMass   : 8 
+# time - fs
+InputTime   : 13 
+# temperature - K
+InputTemp   : 16
+# frequency - cm^-1
+InputFreq   : 18
+
+# System information
+# Number of beads of the RPMD
+NBeads : 4
+# Temperature of the system
+Temperature : 100
+# Nr of trajectories
+NrTrajs : 1
+
+# Output info
+# Time interval between printing step
+PrintTimeStep : 1
+
+# Langevin equilibration parameters
+# Total time of the equilibration
+EquilTotalTime : 100
+# Equilibration time step
+EquilTimeStep : 0.200
+# Relaxation rate of the Langevin dynamics
+EquilRelaxTime : 10
+
+# Evolution parameters
+# Step of the time evolution 
+TimeStep : 0.01     
+# Total time of the propagation for each trajectory
+DynamicsTotalTime    :  100          
+
