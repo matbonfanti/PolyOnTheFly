@@ -22,18 +22,27 @@
 !***************************************************************************************
 MODULE PotentialModule
 #include "preprocessoptions.cpp"
-   USE MyLinearAlgebra
+   USE PeriodicBoundary
 
    PRIVATE
 
    PUBLIC :: SetupPairPotential, DisposePotential, GetPotential
+
 
    !> Setup variable for the potential
    LOGICAL, SAVE :: PotentialModuleIsSetup = .FALSE.
 
    !> Use model pair potential instead of on-the-fly computation of the forces
    LOGICAL, SAVE :: ModelPotential = .FALSE.
-   
+
+   !> How many neighbour atoms are included in the pair potential summation
+   INTEGER, SAVE :: NearPeriodicImages = 0
+   !> Lattice translations of the near neighbour cells
+   REAL, DIMENSION(:,:), ALLOCATABLE :: NearTranslations
+   !> Cutoff distance of the pair potential
+   REAL, SAVE   :: CutOff = 100.0
+
+
    !> Number of atoms of the system
    INTEGER, SAVE :: AtomNo
    
@@ -49,10 +58,15 @@ MODULE PotentialModule
                                        CONTAINS
 !============================================================================================
 
-   SUBROUTINE SetupPairPotential( N, WellDepth, EquilDist  )
+   SUBROUTINE SetupPairPotential( N, WellDepth, EquilDist, PBC  )
       IMPLICIT NONE
       INTEGER, INTENT(IN) :: N
       REAL, INTENT(IN)    :: WellDepth, EquilDist
+      LOGICAL, INTENT(IN) :: PBC
+      INTEGER :: i, j, k
+      REAL, DIMENSION(3,125) :: TmpNearTranslations
+      REAL, DIMENSION(3) :: Vector
+      REAL :: Distance
 
       ! exit if module is setup
       IF ( PotentialModuleIsSetup ) RETURN
@@ -66,7 +80,32 @@ MODULE PotentialModule
       ! Store the pair potential parameters
       LJ_WellDepth = WellDepth
       LJ_EquilDist = EquilDist
-      
+
+      ! Set the cutoff distance of the pair potential
+      CutOff = EquilDist * 6.0
+
+      IF ( PBC ) THEN
+         ! Define how many neighbour cells are checked in the pair potential summation
+         DO i = -5, +5
+            DO j = -5, +5
+               DO k = -5, +5
+                  Vector = FractionalToCartesian( (/ REAL(i), REAL(j), REAL(k) /) )
+                  Distance = SQRT( TheOneWithVectorDotVector( Vector, Vector ) )
+                  IF (Distance < CutOff) THEN
+                     NearPeriodicImages = NearPeriodicImages + 1
+                     TmpNearTranslations(:,NearPeriodicImages) =  Vector
+                  END IF
+               END DO
+            END DO
+         END DO
+         ALLOCATE( NearTranslations(3,NearPeriodicImages) )
+         NearTranslations(:,:) =  TmpNearTranslations(:,1:NearPeriodicImages )
+      ELSE 
+         NearPeriodicImages = 1
+         ALLOCATE( NearTranslations(3,NearPeriodicImages) )
+         NearTranslations(:,1) =  (/ 0, 0, 0 /) 
+      ENDIF
+
       ! Module is now ready
       PotentialModuleIsSetup = .TRUE.
       
@@ -89,7 +128,7 @@ MODULE PotentialModule
       ! If model potential, use lennard-jones pair potential
       IF ( ModelPotential ) THEN
          CALL PairPotential( X(:), GetPotential, Force(:) )
-      
+
       ELSE IF ( .NOT.  ModelPotential ) THEN
          CALL AbortWithError( " GetPotential: true potential is not yet available " )
       END IF
@@ -116,8 +155,8 @@ MODULE PotentialModule
       REAL, INTENT(OUT)               :: V
       REAL, DIMENSION(:), INTENT(OUT) :: Forces(:)
 
-      INTEGER :: iAtom, jAtom
-      REAL, DIMENSION(3) :: iCoord, jCoord
+      INTEGER :: iAtom, jAtom, iTrasl
+      REAL, DIMENSION(3) :: iCoord, FirstDist, TranslatedDist
       REAL    :: Distance, LJDerivative
 
       ! Initialize output variables
@@ -129,21 +168,29 @@ MODULE PotentialModule
          iCoord = Positions( (iAtom-1)*3+1 : iAtom*3 )
          
          DO jAtom = iAtom+1, AtomNo
-            ! Extract coordinates of the j-th atom
-            jCoord = Positions( (jAtom-1)*3+1 : jAtom*3 )
+            ! Extract distance vector between the i-th and j-th atoms
+            FirstDist = iCoord( : ) - Positions( (jAtom-1)*3+1 : jAtom*3 )
 
-            ! Compute distance between the two atoms
-            Distance = SQRT( TheOneWithVectorDotVector(iCoord, jCoord) )
-            ! Compute the pair potential
-            V = V + LennardJones( Distance, LJDerivative )
-            ! Update forces
-            Forces( (iAtom-1)*3+1 ) = Forces( (iAtom-1)*3+1 ) + LJDerivative * ( iCoord(1)-jCoord(1) ) / Distance
-            Forces( (iAtom-1)*3+2 ) = Forces( (iAtom-1)*3+3 ) + LJDerivative * ( iCoord(2)-jCoord(2) ) / Distance
-            Forces(  iAtom*3      ) = Forces(  iAtom*3      ) + LJDerivative * ( iCoord(3)-jCoord(3) ) / Distance
-            Forces( (jAtom-1)*3+1 ) = Forces( (jAtom-1)*3+1 ) - LJDerivative * ( iCoord(1)-jCoord(1) ) / Distance
-            Forces( (jAtom-1)*3+2 ) = Forces( (jAtom-1)*3+3 ) - LJDerivative * ( iCoord(2)-jCoord(2) ) / Distance
-            Forces(  jAtom*3      ) = Forces(  jAtom*3      ) - LJDerivative * ( iCoord(3)-jCoord(3) ) / Distance
+            DO iTrasl = 1, NearPeriodicImages
 
+               ! Compute periodic image of the distance
+               TranslatedDist = FirstDist + NearTranslations(:,iTrasl) 
+               Distance = SQRT( TheOneWithVectorDotVector( TranslatedDist , TranslatedDist ) )
+
+               IF ( Distance > CutOff ) CYCLE
+
+               ! Compute the pair potential
+               V = V + LennardJones( Distance, LJDerivative )
+
+               ! Update forces
+               Forces( (iAtom-1)*3+1 ) = Forces( (iAtom-1)*3+1 ) + LJDerivative * ( TranslatedDist(1) ) / Distance
+               Forces( (iAtom-1)*3+2 ) = Forces( (iAtom-1)*3+3 ) + LJDerivative * ( TranslatedDist(2) ) / Distance
+               Forces(  iAtom*3      ) = Forces(  iAtom*3      ) + LJDerivative * ( TranslatedDist(3) ) / Distance
+               Forces( (jAtom-1)*3+1 ) = Forces( (jAtom-1)*3+1 ) - LJDerivative * ( TranslatedDist(1) ) / Distance
+               Forces( (jAtom-1)*3+2 ) = Forces( (jAtom-1)*3+3 ) - LJDerivative * ( TranslatedDist(2) ) / Distance
+               Forces(  jAtom*3      ) = Forces(  jAtom*3      ) - LJDerivative * ( TranslatedDist(3) ) / Distance
+
+            END DO
          END DO
       END DO
       

@@ -48,7 +48,8 @@
 #endif
 
 MODULE MyLinearAlgebra
-#include "preprocessoptions.cpp"
+   USE ErrorTrap
+   USE MyConsts
 #if defined(WITH_NR)
    USE NRUtility
 #endif
@@ -473,7 +474,7 @@ MODULE MyLinearAlgebra
             
       ELSE IF ( KIND( Matrix(1,1) ) == DOUBLE_PRECISION_KIND ) THEN
             ! use blas routine (double precision, general matrix, matrix vector product )
-             CALL XGEMV ( 'N', N, M, 1.0, Matrix, N, Vector, 1, 0.0, ProductV, 1 )
+             CALL ZGEMV ( 'N', N, M, 1.0, Matrix, N, Vector, 1, 0.0, ProductV, 1 )
       END IF
 #endif
 #if !defined(WITH_LAPACK)

@@ -32,6 +32,8 @@ PROGRAM PolyOnTheFly
    USE RandomNumberGenerator
    USE FFTWrapper
    USE MyLinearAlgebra
+   USE OutputModule
+   USE PeriodicBoundary
    
    IMPLICIT NONE
 
@@ -55,7 +57,7 @@ PROGRAM PolyOnTheFly
    ! MPI data
    INTEGER :: CurrentMPITask = 0
    
-   INTEGER :: iTraj
+   INTEGER :: iTraj, iCoord
    
    ! 1) INPUT SECTION
    !    read info about the molecular system
@@ -167,6 +169,7 @@ PROGRAM PolyOnTheFly
    
    CALL Setup( )
 
+
    !*************************************************************
    !         RUN SECTION 
    !*************************************************************
@@ -197,9 +200,18 @@ PROGRAM PolyOnTheFly
       ! *************  Initial conditions of the system *****************
       ! DEFINE APPROPRIATE INITIAL CONDITIONS 
       X(:) = 0.0;  V(:) = 0.0
+      X( 1 : NDim ) = RandomCoordinates( NAtoms, 10.0 )
+      DO iCoord = 2, NBeads
+         X( NDim*(iCoord-1)+1 : NDim*iCoord ) = X( 1 : NDim )
+      END DO
 
-      CALL Thermalization( )
+      ! >>> ONLY MAIN SHOULD EXECUTE THE FOLLOWING CALL
+      CALL SetupOutput()
+
+!       CALL Thermalization( )
       CALL DynamicsRun( )
+
+      CALL DisposeOutput( )
 
    END DO
    
@@ -327,13 +339,15 @@ PROGRAM PolyOnTheFly
       ! >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
       ! IN THE FINAL VERSION OF THE CODE THE ATOMIC SYSTEM DATA
       ! WILL BE READ HERE FROM THE APPROPRIATE INPUT FILE !!!
-      NAtoms = 10
+      NAtoms = 30
       NDim = 3*NAtoms
       WellDepth = 1.0 * EnergyConversion(InputUnits, InternalUnits)
       EquilDist = 1.0 * LengthConversion(InputUnits, InternalUnits)
       
+      ! Setup periodic boundary conditions
+      CALL PBC_Setup( (/10.0, 0., 0./), (/0.0, 10., 0./), (/0.0, 0., 10./), .FALSE.  )
       ! Setup potential energy subroutines
-      CALL  SetupPairPotential( NAtoms, WellDepth, EquilDist )
+      CALL  SetupPairPotential( NAtoms, WellDepth, EquilDist, .TRUE. )
       
       ! Allocate memory to store the mass vector
       ALLOCATE( MassVector(NDim) )
@@ -414,17 +428,24 @@ PROGRAM PolyOnTheFly
 
       PRINT "(/,A)", " Propagating system in the microcanonical ensamble... " 
 
+      ! Bring the atomic coordinates to the first unit cell
+      CALL PBC_BringToFirstCell( X )
+
       ! Compute starting potential and forces
       CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A,  GetPotential, PotEnergy, RandomNr, 1 )
 
       ! cycle over nstep velocity verlet iterations
       DO iStep = 1,NrSteps
 
+         ! Bring the atomic coordinates to the first unit cell
+         CALL PBC_BringToFirstCell( X )
+
          ! Propagate for one timestep
          CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
 
          ! output to write every nprint steps 
          IF ( mod(iStep,PrintStepInterval) == 0 ) THEN
+            CALL PrintOutput( )
 
             ! increment counter for printing steps
             kStep = kStep+1
@@ -573,6 +594,7 @@ PROGRAM PolyOnTheFly
    ! ===================================================================================================
 
    FUNCTION TimeDifference( Time1, Time2 )
+      IMPLICIT NONE
       INTEGER, DIMENSION(8), INTENT(IN)    :: Time1, Time2         
       REAL :: TimeDifference
    
@@ -585,6 +607,41 @@ PROGRAM PolyOnTheFly
    END FUNCTION TimeDifference
       
    ! ===================================================================================================
+
+   FUNCTION RandomCoordinates( NAtoms, UnitCell  ) RESULT(X)
+      IMPLICIT NONE
+      INTEGER, INTENT(IN)       :: NAtoms
+      REAL, INTENT(IN)          :: UnitCell
+      REAL, DIMENSION(3*NAtoms) :: X
+      INTEGER :: i, j
+      REAL :: MinDistance, Distance
+      REAL, DIMENSION(3) :: VecDist
+
+      X( 1 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+      X( 2 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+      X( 3 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+
+      DO i = 2, NAtoms
+         X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+         X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+         X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+
+         DO
+            MinDistance = 1000.0
+            DO j = 1, i-1
+               VecDist = X( (i-1)*3+1 : i*3 ) - X( (j-1)*3+1 : j*3 )
+               Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
+               MinDistance = MIN( MinDistance, Distance )
+            END DO
+            IF  ( Distance > 1.0 ) EXIT
+            X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+            X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+            X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+         END DO
+      END DO
+
+   END FUNCTION RandomCoordinates
+
 
    END PROGRAM PolyOnTheFly
       

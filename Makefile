@@ -13,10 +13,10 @@ LOGFILE = yes
 LOGNAME = potf.log
 
 # Compiler ( gfortran, ifort )
-FC = gfortran
+FC = ifort
 
 # Debugging options ( yes or no )
-DEBUG = yes
+DEBUG = no
 
 # Optimization level
 OPTLEVEL = 3
@@ -28,7 +28,7 @@ FFTW3 = no
 OPENMP = no 
 
 # linking LAPACK and BLAS 
-LAPACK = no
+LAPACK = yes
 
 # Compile with standard real 8 (see details about the flags for each compiler...)
 REAL8 = yes
@@ -215,6 +215,11 @@ ifeq (${DEBUG}, yes)
    PPDEFINE += -DVERBOSE_OUTPUT
 endif
 
+# Setup logfile option
+ifeq (${LOGFILE}, yes)
+   PPDEFINE += -DLOG_FILE=\"${LOGNAME}\"
+endif
+
 # Preprocess with lapack calls
 ifeq (${LAPACK}, yes)
    PPDEFINE += -DWITH_LAPACK
@@ -399,16 +404,22 @@ ${OBJDIR}/RandomNumberGenerator.o : ${SRCDIR}/RandomNumberGenerator.f90         
 # Module containing the common data (v3)
 ${OBJDIR}/SharedData.o            : ${SRCDIR}/SharedData.f90                                                       ${COMMONDEP}
 
+# Writing molecular trajectory in VTF format 
+${OBJDIR}/VTFFileModule.o         : ${SRCDIR}/VTFFileModule.f90                                                    ${COMMONDEP}
+
+# Writing molecular trajectory in VTF format 
+${OBJDIR}/PeriodicBoundary.o      : ${SRCDIR}/PeriodicBoundary.f90                                                 ${COMMONDEP}
+
 # Module containing the integrator for the classical eq of motion
 ${OBJDIR}/ClassicalEqMotion.o     : ${SRCDIR}/ClassicalEqMotion.f90 ${OBJDIR}/RandomNumberGenerator.o \
                                     ${OBJDIR}/FFTWrapper.o                                                         ${COMMONDEP}
 
 # Module containing the potential energy surface
 ${OBJDIR}/PotentialModule.o       : ${SRCDIR}/PotentialModule.f90 ${OBJDIR}/RandomNumberGenerator.o \
-                                    ${OBJDIR}/MyLinearAlgebra.o                                                    ${COMMONDEP}
+                                    ${OBJDIR}/MyLinearAlgebra.o ${OBJDIR}/PeriodicBoundary.o                       ${COMMONDEP}
 
 # Module containing the subroutines to write output to files
-${OBJDIR}/OutputModule.o          : ${SRCDIR}/OutputModule.f90 ${OBJDIR}/SharedData.o                              ${COMMONDEP}
+${OBJDIR}/OutputModule.o          : ${SRCDIR}/OutputModule.f90 ${OBJDIR}/SharedData.o ${OBJDIR}/VTFFileModule.o    ${COMMONDEP}
 
 
 

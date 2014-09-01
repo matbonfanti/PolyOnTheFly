@@ -58,11 +58,11 @@ MODULE SharedData
    INTEGER :: PrintStepInterval         !< Step interval between each printing step during the dynamics
 
    ! Time evolution dataset
-   TYPE(Evolution) :: MolecularDynamics   !< Propagate in micro/canonical ensamble to extract results
-   TYPE(Evolution) :: InitialConditions   !< Propagate in microcanonical ensamble to generate init cond
+   TYPE(Evolution), SAVE :: MolecularDynamics   !< Propagate in micro/canonical ensamble to extract results
+   TYPE(Evolution), SAVE :: InitialConditions   !< Propagate in microcanonical ensamble to generate init cond
 
    ! Transform to ring normal modes 
-   TYPE(FFTHalfComplexType) :: RingNormalModes   !< Transform ring coords to normal modes (and viceversa)
+   TYPE(FFTHalfComplexType), SAVE :: RingNormalModes   !< Transform ring coords to normal modes (and viceversa)
 
    ! Internal state of the random number generator
    TYPE(RNGInternalState), SAVE :: RandomNr       !< Internal state of the random number generator
