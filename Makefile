@@ -13,16 +13,16 @@ LOGFILE = yes
 LOGNAME = potf.log
 
 # Compiler ( gfortran, ifort )
-FC = ifort
+FC = gfortran
 
 # Debugging options ( yes or no )
-DEBUG = no
+DEBUG = no 
 
 # Optimization level
 OPTLEVEL = 3
 
 # linking FFTW 3.3
-FFTW3 = no
+FFTW3 = yes
 
 # OpenMP libraries
 OPENMP = no 
@@ -41,7 +41,7 @@ REAL8 = yes
 # 2013-SEQ, 2013-MULTI      -   2013 version, sequential / multithreaded 
 # 11-SEQ,   11-MULTI        -   11.x version, sequential / multithreaded 
 # 10-SEQ,   10-MULTI        -   10.x version, sequential / multithreaded 
-INTELVERS = 2013-MULTI
+INTELVERS = 2013-SEQ
 
 # gfortran lapack libraries
 # GNU      - system default libraries 
@@ -254,16 +254,16 @@ endif
 # Set flags for defining standard variable kinds
 COMPILEFLG += ${DATAFLG} 
 
-# If lapack, add the linking options
-ifeq (${LAPACK}, yes)
-   LIBFLG += ${LAPACKFLG}
-   LINKFLG += ${LAPACKCOMPILE}
-endif
-
 # If FFTW3, add the linking options
 ifeq (${FFTW3}, yes)
    LIBFLG += ${FFTW3FLG}
    COMPILEFLG += ${FFTW3COMPILE}
+endif
+
+# If lapack, add the linking options
+ifeq (${LAPACK}, yes)
+   LIBFLG += ${LAPACKFLG}
+   LINKFLG += ${LAPACKCOMPILE}
 endif
 
 # If OPENMP, add the linking options

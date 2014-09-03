@@ -167,7 +167,7 @@ MODULE PotentialModule
          ! Extract coordinates of the i-th atom
          iCoord = Positions( (iAtom-1)*3+1 : iAtom*3 )
          
-         DO jAtom = iAtom+1, AtomNo
+         DO jAtom = 1, AtomNo
             ! Extract distance vector between the i-th and j-th atoms
             FirstDist = iCoord( : ) - Positions( (jAtom-1)*3+1 : jAtom*3 )
 
@@ -177,22 +177,27 @@ MODULE PotentialModule
                TranslatedDist = FirstDist + NearTranslations(:,iTrasl) 
                Distance = SQRT( TheOneWithVectorDotVector( TranslatedDist , TranslatedDist ) )
 
+               IF (( iAtom == jAtom ) .AND. ( ALL(NearTranslations(:,iTrasl) == (/ 0., 0., 0. /)) )) CYCLE
+
                IF ( Distance > CutOff ) CYCLE
 
                ! Compute the pair potential
                V = V + LennardJones( Distance, LJDerivative )
 
                ! Update forces
-               Forces( (iAtom-1)*3+1 ) = Forces( (iAtom-1)*3+1 ) + LJDerivative * ( TranslatedDist(1) ) / Distance
-               Forces( (iAtom-1)*3+2 ) = Forces( (iAtom-1)*3+3 ) + LJDerivative * ( TranslatedDist(2) ) / Distance
-               Forces(  iAtom*3      ) = Forces(  iAtom*3      ) + LJDerivative * ( TranslatedDist(3) ) / Distance
-               Forces( (jAtom-1)*3+1 ) = Forces( (jAtom-1)*3+1 ) - LJDerivative * ( TranslatedDist(1) ) / Distance
-               Forces( (jAtom-1)*3+2 ) = Forces( (jAtom-1)*3+3 ) - LJDerivative * ( TranslatedDist(2) ) / Distance
-               Forces(  jAtom*3      ) = Forces(  jAtom*3      ) - LJDerivative * ( TranslatedDist(3) ) / Distance
+               Forces( (iAtom-1)*3+1 ) = Forces( (iAtom-1)*3+1 ) - LJDerivative * ( TranslatedDist(1) ) / Distance
+               Forces( (iAtom-1)*3+2 ) = Forces( (iAtom-1)*3+3 ) - LJDerivative * ( TranslatedDist(2) ) / Distance
+               Forces(  iAtom*3      ) = Forces(  iAtom*3      ) - LJDerivative * ( TranslatedDist(3) ) / Distance
+               Forces( (jAtom-1)*3+1 ) = Forces( (jAtom-1)*3+1 ) + LJDerivative * ( TranslatedDist(1) ) / Distance
+               Forces( (jAtom-1)*3+2 ) = Forces( (jAtom-1)*3+3 ) + LJDerivative * ( TranslatedDist(2) ) / Distance
+               Forces(  jAtom*3      ) = Forces(  jAtom*3      ) + LJDerivative * ( TranslatedDist(3) ) / Distance
 
             END DO
          END DO
       END DO
+
+      V = 0.5 * V
+      Forces(:) = 0.5 * Forces(:)
       
    END SUBROUTINE PairPotential
 
@@ -208,13 +213,13 @@ MODULE PotentialModule
 ! 
 !    END FUNCTION MorseV
       
-   REAL FUNCTION LennardJones( Distance, Force ) RESULT(V) 
+   REAL FUNCTION LennardJones( Distance, Derivative ) RESULT(V) 
       IMPLICIT NONE
       REAL, INTENT(IN)  :: Distance
-      REAL, INTENT(OUT) :: Force 
+      REAL, INTENT(OUT) :: Derivative 
 
       V = LJ_WellDepth *( (LJ_EquilDist/Distance)**12 - 2.0*(LJ_EquilDist/Distance)**6 )
-      Force = + 12.0 * LJ_WellDepth / Distance * ( (LJ_EquilDist/Distance)**12 - (LJ_EquilDist/Distance)**6 )
+      Derivative = - 12.0 * LJ_WellDepth / Distance * ( (LJ_EquilDist/Distance)**12 - (LJ_EquilDist/Distance)**6 )
    END FUNCTION LennardJones
 
 END MODULE PotentialModule

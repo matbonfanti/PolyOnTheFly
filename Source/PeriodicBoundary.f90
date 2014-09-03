@@ -23,6 +23,7 @@
 !***************************************************************************************
 MODULE PeriodicBoundary
 #include "preprocessoptions.cpp"
+   USE FFTWrapper
 
    PRIVATE
 
@@ -96,21 +97,34 @@ MODULE PeriodicBoundary
 !> If the external program use cartesian coordinates, the corresponding fractional
 !> coordinate are computed and then the fractional coordinates are taken and trasformed
 !> back to cartesian coordinates.
+!> The number of beads in RPMD is required to make sure that the degree of 
+!> freedom is moved to another unit cell only when the centroid of the ring
+!> polymer is outside the first unit cell. 
 !>
 !> @param      Array of dimension 3*n with the arbitrary coordinates
+!> @param      Number of replicas of each degree of freedom
 !> @returns    Array of dimension 3*n with the first unit cell coordinates.
 !*******************************************************************************
-   SUBROUTINE PBC_BringToFirstCell( X )
+   SUBROUTINE PBC_BringToFirstCell( X, InputNBeads )
       IMPLICIT NONE
       REAL, DIMENSION(:), INTENT(INOUT) :: X
+      INTEGER, INTENT(IN), OPTIONAL     :: InputNBeads
       REAL, DIMENSION(3) :: Vector
-      INTEGER :: i, j
+      INTEGER :: i, j, NBeads
 
       ! Return if module not have been setup yet ( NON PERIODIC SYSTEM )
       IF ( .NOT. ModuleisSetup )  RETURN 
       
       ! Check the dimension of the vector
       CALL ERROR( MOD( size(X), 3 ) /= 0, " PeriodicBoundary.PBC_BringToFirstCell: X size is not multiple of 3 " )
+
+      ! Check the consistency of the number of beads and store the number
+      IF (PRESENT( InputNBeads )) THEN
+         CALL ERROR( MOD(size(X),InputNBeads) /= 0, " PeriodicBoundary.PBC_BringToFirstCell: X size is not multiple of NBeads ")
+         NBeads = InputNBeads
+      ELSE
+         NBeads = 1
+      END IF
 
       ! Cycle over the atoms
       DO i = 1, size(X)/3

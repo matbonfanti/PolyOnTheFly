@@ -87,6 +87,7 @@ MODULE VTFFileModule
       TYPE(VTFFile), INTENT(INOUT)                  :: VTFFileObj
       CHARACTER(2), DIMENSION(:), INTENT(IN)        :: Atoms 
       LOGICAL, DIMENSION(:,:), INTENT(IN), OPTIONAL :: Bonds
+      CHARACTER(20) :: iString, jString
       INTEGER :: i, j
 
       ! Error if module not have been setup yet
@@ -116,10 +117,13 @@ MODULE VTFFileModule
 #endif
 
       IF ( PRESENT(Bonds) ) THEN
+
          ! Write list of bonds (read from lower triangle of the matrix)
          DO j = 1,  VTFFileObj%NrAtoms
-            DO i = i+1,  VTFFileObj%NrAtoms
-               IF ( Bonds(i,j) ) WRITE( VTFFileObj%Unit, *) "bond ",i-1,":",j-1
+            DO i = j+1,  VTFFileObj%NrAtoms
+               WRITE(iString,*) i-1
+               WRITE(jString,*) j-1
+               IF ( Bonds(i,j) ) WRITE( VTFFileObj%Unit, *) "bond ",TRIM(ADJUSTL(iString)),":",TRIM(ADJUSTL(jString))
             END DO
          END DO
 

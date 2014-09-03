@@ -181,7 +181,7 @@ PROGRAM PolyOnTheFly
       PRINT "(2/,A)", "***************************************************"
       PRINT "(A,I4)", "            Trajectory Nr. ", iTraj
       PRINT "(A,/)" , "***************************************************"
-
+PBC_BringToFirstCell
 !       AvEnergyOutputUnit = LookForFreeUnit()
 !       OPEN( FILE="EnergyAverages.dat", UNIT=AvEnergyOutputUnit )
 !       WRITE(AvEnergyOutputUnit, "(5A,I6,A,/)") "# E vs time (", trim(TimeUnit(InputUnits)), ",", &
@@ -202,13 +202,17 @@ PROGRAM PolyOnTheFly
       X(:) = 0.0;  V(:) = 0.0
       X( 1 : NDim ) = RandomCoordinates( NAtoms, 10.0 )
       DO iCoord = 2, NBeads
-         X( NDim*(iCoord-1)+1 : NDim*iCoord ) = X( 1 : NDim )
+         X( NDim*(iCoord-1)+1 : NDim*iCoord ) = X( 1 : NDim ) 
       END DO
+
+!       DO iCoord = 1, NDim*NBeads
+!          X(iCoord) = X(iCoord) + UniformRandomNr( RandomNr ) * 1.0
+!       END DO
 
       ! >>> ONLY MAIN SHOULD EXECUTE THE FOLLOWING CALL
       CALL SetupOutput()
 
-!       CALL Thermalization( )
+      CALL Thermalization( )
       CALL DynamicsRun( )
 
       CALL DisposeOutput( )
@@ -315,11 +319,11 @@ PROGRAM PolyOnTheFly
       LangevinGamma = 1. / ( LangevinGamma * TimeConversion(InputUnits, InternalUnits) )
 
       ! Compute relevant step numbers
-      NrSteps = DynamicsTotalTime / TimeStep
-      EquilNrSteps = EquilTotalTime / EquilTimeStep
+      NrSteps = CEILING( DynamicsTotalTime / TimeStep )
+      EquilNrSteps = NINT(  EquilTotalTime / EquilTimeStep )
       ! Set the step interval between each printing step
-      PrintStepInterval = PrintTimeStep / TimeStep
-      EquilPrintStepInterval = PrintTimeStep / EquilTimeStep
+      PrintStepInterval = CEILING( PrintTimeStep / TimeStep )
+      EquilPrintStepInterval = NINT( PrintTimeStep / EquilTimeStep )
       
       ! Frequency and force constant of the harmonic force between the beads
       BeadsFrequency = NBeads * Temperature
@@ -362,8 +366,8 @@ PROGRAM PolyOnTheFly
       ! Set ring polymer molecular dynamics parameter
       CALL SetupRingPolymer( MolecularDynamics, NBeads, BeadsFrequency ) 
 
-!       ! Set transform from ring coordinates to normal modes
-!       CALL SetupFFT( RingNormalModes, NBeads ) 
+      ! Set transform from ring coordinates to normal modes
+      CALL SetupFFT( RingNormalModes, NBeads ) 
 
       ! Set variables for EOM integration of the system only in the microcanonical ensamble 
       ! this will be done in a serial way, so no replicated data
@@ -394,6 +398,7 @@ PROGRAM PolyOnTheFly
       DO iStep = 1, EquilNrSteps
       
          IF ( MOD(iStep-1, EquilPrintStepInterval) == 0.0 ) THEN
+            CALL PrintOutput( )
 
             ! New print step of the equilibration
             kStep = kStep + 1
@@ -429,7 +434,7 @@ PROGRAM PolyOnTheFly
       PRINT "(/,A)", " Propagating system in the microcanonical ensamble... " 
 
       ! Bring the atomic coordinates to the first unit cell
-      CALL PBC_BringToFirstCell( X )
+!       CALL PBC_BringToFirstCell( X )
 
       ! Compute starting potential and forces
       CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A,  GetPotential, PotEnergy, RandomNr, 1 )
@@ -439,7 +444,7 @@ PROGRAM PolyOnTheFly
       DO iStep = 1,NrSteps
 
          ! Bring the atomic coordinates to the first unit cell
-         CALL PBC_BringToFirstCell( X )
+!          CALL PBC_BringToFirstCell( X )
 
          ! output to write every nprint steps 
          IF ( mod(iStep-1,PrintStepInterval) == 0 ) THEN
@@ -618,14 +623,14 @@ PROGRAM PolyOnTheFly
       REAL :: MinDistance, Distance
       REAL, DIMENSION(3) :: VecDist
 
-      X( 1 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
-      X( 2 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
-      X( 3 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+      X( 1 ) = UniformRandomNr( RandomNr ) * UnitCell
+      X( 2 ) = UniformRandomNr( RandomNr ) * UnitCell
+      X( 3 ) = UniformRandomNr( RandomNr ) * UnitCell
 
       DO i = 2, NAtoms
-         X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
-         X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
-         X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+         X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell
+         X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell
+         X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell
 
          DO
             MinDistance = 1000.0
@@ -635,9 +640,9 @@ PROGRAM PolyOnTheFly
                MinDistance = MIN( MinDistance, Distance )
             END DO
             IF  ( MinDistance > 1.5 ) EXIT
-            X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
-            X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
-            X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
+            X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell
+            X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell
+            X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell
          END DO
       END DO
 
