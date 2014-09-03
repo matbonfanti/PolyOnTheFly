@@ -434,17 +434,15 @@ PROGRAM PolyOnTheFly
       ! Compute starting potential and forces
       CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A,  GetPotential, PotEnergy, RandomNr, 1 )
 
+
       ! cycle over nstep velocity verlet iterations
       DO iStep = 1,NrSteps
 
          ! Bring the atomic coordinates to the first unit cell
          CALL PBC_BringToFirstCell( X )
 
-         ! Propagate for one timestep
-         CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
-
          ! output to write every nprint steps 
-         IF ( mod(iStep,PrintStepInterval) == 0 ) THEN
+         IF ( mod(iStep-1,PrintStepInterval) == 0 ) THEN
             CALL PrintOutput( )
 
             ! increment counter for printing steps
@@ -464,6 +462,9 @@ PROGRAM PolyOnTheFly
 !                END IF
 
          END IF 
+
+         ! Propagate for one timestep
+         CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
 
       END DO
 
@@ -633,12 +634,23 @@ PROGRAM PolyOnTheFly
                Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
                MinDistance = MIN( MinDistance, Distance )
             END DO
-            IF  ( Distance > 1.0 ) EXIT
+            IF  ( MinDistance > 1.5 ) EXIT
             X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
             X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
             X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell/2.0 + UnitCell/2.0
          END DO
       END DO
+
+!       DO i = 1, NAtoms
+!          DO j = i+1, NAtoms
+! 
+!                VecDist = X( (i-1)*3+1 : i*3 ) - X( (j-1)*3+1 : j*3 )
+!                Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
+!                PRINT*, Distance
+! 
+!          END DO
+!       END DO
+!       STOP
 
    END FUNCTION RandomCoordinates
 

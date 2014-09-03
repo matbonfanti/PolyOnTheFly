@@ -33,7 +33,7 @@ MODULE PotentialModule
    LOGICAL, SAVE :: PotentialModuleIsSetup = .FALSE.
 
    !> Use model pair potential instead of on-the-fly computation of the forces
-   LOGICAL, SAVE :: ModelPotential = .FALSE.
+   LOGICAL, SAVE :: ModelPotential != .FALSE.
 
    !> How many neighbour atoms are included in the pair potential summation
    INTEGER, SAVE :: NearPeriodicImages = 0
@@ -73,7 +73,7 @@ MODULE PotentialModule
 
       ! use model potential
       ModelPotential = .TRUE.
-      
+
       ! Set the number of atoms of the system
       AtomNo = N
       
@@ -103,7 +103,7 @@ MODULE PotentialModule
       ELSE 
          NearPeriodicImages = 1
          ALLOCATE( NearTranslations(3,NearPeriodicImages) )
-         NearTranslations(:,1) =  (/ 0, 0, 0 /) 
+         NearTranslations(:,1) =  (/ 0., 0., 0. /) 
       ENDIF
 
       ! Module is now ready
@@ -214,7 +214,7 @@ MODULE PotentialModule
       REAL, INTENT(OUT) :: Force 
 
       V = LJ_WellDepth *( (LJ_EquilDist/Distance)**12 - 2.0*(LJ_EquilDist/Distance)**6 )
-      Force = - 12.0 * LJ_WellDepth / Distance * (LJ_EquilDist/Distance)**7 *( (LJ_EquilDist/Distance)**6 - 1.0 )
+      Force = + 12.0 * LJ_WellDepth / Distance * ( (LJ_EquilDist/Distance)**12 - (LJ_EquilDist/Distance)**6 )
    END FUNCTION LennardJones
 
 END MODULE PotentialModule
