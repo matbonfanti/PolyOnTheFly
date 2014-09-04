@@ -181,22 +181,8 @@ PROGRAM PolyOnTheFly
       PRINT "(2/,A)", "***************************************************"
       PRINT "(A,I4)", "            Trajectory Nr. ", iTraj
       PRINT "(A,/)" , "***************************************************"
-PBC_BringToFirstCell
-!       AvEnergyOutputUnit = LookForFreeUnit()
-!       OPEN( FILE="EnergyAverages.dat", UNIT=AvEnergyOutputUnit )
-!       WRITE(AvEnergyOutputUnit, "(5A,I6,A,/)") "# E vs time (", trim(TimeUnit(InputUnits)), ",", &
-!                                                              trim(EnergyUnit(InputUnits)), ") - ", NrTrajs, " trajectories "
-!       
-!       AvCoordOutputUnit = LookForFreeUnit()
-!       OPEN( FILE="AverageCoords.dat", UNIT=AvCoordOutputUnit )
-!       WRITE(AvCoordOutputUnit, "(5A,I6,A,/)") "# System coordinate vs time (", trim(TimeUnit(InputUnits)), ",", &
-!                                                             trim(LengthUnit(InputUnits)), ") - ", NrTrajs, " trajectories "
-! 
-!       AvBathCoordUnit = LookForFreeUnit()
-!       OPEN( FILE="AverageBathCoords.dat", UNIT=AvBathCoordUnit )
-!       WRITE(AvBathCoordUnit, "(5A,I6,A,/)") "# Bath coordinate vs time (", trim(TimeUnit(InputUnits)), ",", &
-!                                                             trim(LengthUnit(InputUnits)), ") - ", NrTrajs, " trajectories "
-      
+
+     
       ! *************  Initial conditions of the system *****************
       ! DEFINE APPROPRIATE INITIAL CONDITIONS 
       X(:) = 0.0;  V(:) = 0.0
@@ -206,7 +192,7 @@ PBC_BringToFirstCell
       END DO
 
 !       DO iCoord = 1, NDim*NBeads
-!          X(iCoord) = X(iCoord) + UniformRandomNr( RandomNr ) * 1.0
+!          X(iCoord) = X(iCoord) + UniformRandomNr( RandomNr ) * 0.5
 !       END DO
 
       ! >>> ONLY MAIN SHOULD EXECUTE THE FOLLOWING CALL
@@ -272,7 +258,7 @@ PBC_BringToFirstCell
       ! Nr of replicas of the system for the ring polymer dynamics
       CALL SetFieldFromInput( InputData, "NBeads", NBeads )
       ! Temperature of the system
-      CALL SetFieldFromInput( InputData, "Temperature", Temperature, 1.0 )
+      CALL SetFieldFromInput( InputData, "Temperature", Temperature )
       ! Nr of the trajectories of the simulation
       CALL SetFieldFromInput( InputData, "NrTrajs", NrTrajs )
       
@@ -343,13 +329,13 @@ PBC_BringToFirstCell
       ! >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
       ! IN THE FINAL VERSION OF THE CODE THE ATOMIC SYSTEM DATA
       ! WILL BE READ HERE FROM THE APPROPRIATE INPUT FILE !!!
-      NAtoms = 30
+      NAtoms = 1
       NDim = 3*NAtoms
       WellDepth = 1.0 * EnergyConversion(InputUnits, InternalUnits)
       EquilDist = 1.0 * LengthConversion(InputUnits, InternalUnits)
       
       ! Setup periodic boundary conditions
-      CALL PBC_Setup( (/10.0, 0., 0./), (/0.0, 10., 0./), (/0.0, 0., 10./), .FALSE.  )
+      CALL PBC_Setup( (/10.0, 0., 0./), (/0.0, 10., 0./), (/0.0, 0., 10./)  )
       ! Setup potential energy subroutines
       CALL  SetupPairPotential( NAtoms, WellDepth, EquilDist, .TRUE. )
       
@@ -361,7 +347,7 @@ PBC_BringToFirstCell
       ! Allocate memory and initialize vectors for trajectory, acceleration and masses
       ALLOCATE( X(NDim*NBeads), V(NDim*NBeads), A(NDim*NBeads) )
       
-      ! Set variables for EOM integration in the microcanonical ensamble (system + bath)
+      ! Set variables for EOM integration in the microcanonical ensamble 
       CALL EvolutionSetup( MolecularDynamics, NDim, MassVector, TimeStep )
       ! Set ring polymer molecular dynamics parameter
       CALL SetupRingPolymer( MolecularDynamics, NBeads, BeadsFrequency ) 
@@ -371,11 +357,14 @@ PBC_BringToFirstCell
 
       ! Set variables for EOM integration of the system only in the microcanonical ensamble 
       ! this will be done in a serial way, so no replicated data
-      CALL EvolutionSetup( InitialConditions, NDim, MassVector, TimeStep )
+      CALL EvolutionSetup( InitialConditions, NDim, MassVector, EquilTimeStep )
       ! Set ring polymer molecular dynamics parameter
-      CALL SetupRingPolymer( InitialConditions, NBeads, BeadsFrequency ) 
+      IF ( NBeads > 1 ) CALL SetupRingPolymer( InitialConditions, NBeads, BeadsFrequency ) 
       ! Set Langevin thermostat for initial equilibration of the system
       CALL SetupThermostat( InitialConditions, LangevinGamma, Temperature )
+
+      ! Allocate memory for istantaneous averages
+      ALLOCATE( KinPerCoord(NDim), CentroidPos(NDim), CentroidVel(NDim) )
 
    END SUBROUTINE Setup
       
@@ -383,38 +372,51 @@ PBC_BringToFirstCell
 
    SUBROUTINE Thermalization( )
       IMPLICIT NONE
-      
-      REAL :: PotEnergy, KinEnergy
-      REAL, DIMENSION(NDim) ::  KinPerAtom, CentroidPos, CentroidVel
       INTEGER :: iStep, kStep
       
       PRINT "(/,A)", " Propagating system in the canonical ensamble with PILE ... " 
 
+      ! Bring the atomic coordinates to the first unit cell
+      CALL PBC_BringToFirstCell( X, NBeads )
+
       ! Initialize forces
-      CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
+      IF ( NBeads > 1 ) THEN
+         CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
+      ELSE
+         CALL EOM_LangevinSecondOrder( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+      END IF
 
       kStep = 0
       ! Cycle over the equilibration steps
       DO iStep = 1, EquilNrSteps
+
+         ! Bring the atomic coordinates to the first unit cell
+         CALL PBC_BringToFirstCell( X, NBeads )
       
          IF ( MOD(iStep-1, EquilPrintStepInterval) == 0.0 ) THEN
-            CALL PrintOutput( )
 
             ! New print step of the equilibration
             kStep = kStep + 1
 
             ! Compute average energies
-            CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerAtom ) 
+            CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
+            TotEnergy = PotEnergy + KinEnergy
             ! Compute coordinate and velocity centroid
             CentroidPos = CentroidCoord( X )
-            CentroidVel = CentroidCoord( V )
+            CentroidVel = CentroidCoord( V )     
+
+            CALL PrintOutput( (iStep-1)*EquilTimeStep )
 
 !                WRITE(746,"(I10,10F20.8)") kStep, (PotEnergy+KinEnergy)*EnergyConversion(InternalUnits,InputUnits), &
 !                      PotEnergy*EnergyConversion(InternalUnits,InputUnits), KinEnergy*EnergyConversion(InternalUnits,InputUnits)
          END IF
       
          ! Propagate for one timestep with Velocity-Verlet
-         CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 2 )
+         IF ( NBeads > 1 ) THEN
+            CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+         ELSE
+            CALL EOM_LangevinSecondOrder( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+         END IF
 
       END DO
       
@@ -426,45 +428,35 @@ PBC_BringToFirstCell
 
    SUBROUTINE DynamicsRun( )
       IMPLICIT NONE
-
-      REAL :: PotEnergy, KinEnergy
-      REAL, DIMENSION(NDim) ::  KinPerAtom, CentroidPos, CentroidVel
       INTEGER :: iStep, kStep
 
       PRINT "(/,A)", " Propagating system in the microcanonical ensamble... " 
 
       ! Bring the atomic coordinates to the first unit cell
-!       CALL PBC_BringToFirstCell( X )
+      CALL PBC_BringToFirstCell( X, NBeads )
 
       ! Compute starting potential and forces
       CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A,  GetPotential, PotEnergy, RandomNr, 1 )
-
 
       ! cycle over nstep velocity verlet iterations
       DO iStep = 1,NrSteps
 
          ! Bring the atomic coordinates to the first unit cell
-!          CALL PBC_BringToFirstCell( X )
+         CALL PBC_BringToFirstCell( X, NBeads )
 
          ! output to write every nprint steps 
          IF ( mod(iStep-1,PrintStepInterval) == 0 ) THEN
-            CALL PrintOutput( )
 
             ! increment counter for printing steps
             kStep = kStep+1
 
             ! Compute average energies
-            CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerAtom ) 
+            CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
             ! Compute coordinate and velocity centroid
             CentroidPos = CentroidCoord( X )
             CentroidVel = CentroidCoord( V )               
             
-!                ! If massive level of output, print traj information to std out
-!                IF ( PrintType == DEBUG ) THEN
-!                   WRITE(DebugUnitEn,800) TimeStep*real(iStep)/MyConsts_fs2AU, KinEnergy, PotEnergy, KinEnergy+PotEnergy
-!                   WRITE(DebugUnitCoord,800) TimeStep*real(iStep)/MyConsts_fs2AU, X(:)
-!                   WRITE(DebugUnitVel,800) TimeStep*real(iStep)/MyConsts_fs2AU, V(:)
-!                END IF
+            CALL PrintOutput( (iStep-1)*TimeStep )
 
          END IF 
 
@@ -497,24 +489,44 @@ PBC_BringToFirstCell
       REAL, DIMENSION(NDim)         :: CentroidV
       INTEGER                       :: iCoord, iBead
 
-      ! ***************** VIRIAL AVERAGE PER ATOM **************************
-      ! centroid of the virial product (virial as average)
+      IF ( NBeads > 1 ) THEN
 
-      KinCoords(:) = 0.0
-      DO iBead = 1, NBeads
+         ! ***************** VIRIAL AVERAGE PER ATOM **************************
+         ! centroid of the virial product (virial as average)
+
+         KinCoords(:) = 0.0
+         DO iBead = 1, NBeads
+            DO iCoord = 1, NDim
+               KinCoords(iCoord) = KinCoords(iCoord) - X((iBead-1)*NDim+iCoord) * Mass(iCoord) * A((iBead-1)*NDim+iCoord)
+            END DO
+         END DO         
+         KinCoords(:) = 0.5 * KinCoords(:) / real(NBeads)
+
+         ! ******************* VIRIAL TOTAL ENERGY ****************************
+         
+         KinTot = 0.0
          DO iCoord = 1, NDim
-            KinCoords(iCoord) = KinCoords(iCoord) - X((iBead-1)*NDim+iCoord) * Mass(iCoord) * A((iBead-1)*NDim+iCoord)
-         END DO
-      END DO         
-      KinCoords(:) = 0.5 * KinCoords(:) / real(NBeads)
+            KinTot = KinTot + KinCoords(iCoord)
+         END DO         
 
-      ! ******************* VIRIAL TOTAL ENERGY ****************************
-      
-      KinTot = 0.0
-      DO iCoord = 1, NDim
-         KinTot = KinTot + KinCoords(iCoord)
-      END DO         
-      
+      ELSE IF ( NBeads == 1 ) THEN
+
+         ! ***************** MECHANICAL KIN PER ATOM **************************
+         ! regular definition of kinetic energy
+
+         DO iCoord = 1, NDim
+            KinCoords(iCoord) = 0.5 * Mass(iCoord) * V(iCoord)**2
+         END DO
+
+         ! ******************* MECHANICAL TOTAL KIN ENERGY ********************
+         
+         KinTot = 0.0
+         DO iCoord = 1, NDim
+            KinTot = KinTot + KinCoords(iCoord)
+         END DO         
+         
+      END IF
+
 !       ! 2) THERMODYNAMICS TOTAL ENERGY
 !       ! sum up energy of the ring oscillators and subtract it to average energy
 !       EnergyAverages(2) = 0.0 
@@ -941,7 +953,7 @@ PBC_BringToFirstCell
 !          CLOSE( AvBathCoordUnit )
 !       END IF
 ! 
-!       800 FORMAT(F12.5,1000F15.8)
+!       800 FORMAT()
 !       600 FORMAT (/, " Initial condition of the MD trajectory ",/   &
 !                      " * Energy of the system (eV)          ",1F10.4,/    &
 !                      " * Kinetic Energy of the bath (eV)    ",1F10.4,/    &

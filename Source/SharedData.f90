@@ -93,7 +93,19 @@ MODULE SharedData
 
 !=============================================================================================================
 
-   
+   ! ISTANTANEOUS AVERAGES 
+
+   REAL ::  PotEnergy                              !< Potential energy
+   REAL ::  KinEnergy                              !< Total kinetic energy (in AIMD computed from the virial average)
+   REAL, DIMENSION(:), ALLOCATABLE :: KinPerCoord  !< Kinetic energy per coordinate ( still virial )
+   REAL ::  TotEnergy                              !< Total energy
+
+   REAL, DIMENSION(:), ALLOCATABLE :: CentroidPos  !< Position of the centroid of the RP
+   REAL, DIMENSION(:), ALLOCATABLE :: CentroidVel  !< Velocity of the centroid of the RP
+
+!=============================================================================================================
+
+
 ! CONTAINS
 
 !    !> Variable to define which kind of calculation is required 

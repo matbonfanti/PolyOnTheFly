@@ -21,6 +21,7 @@
 !>  \todo          ____________________________
 !>                 
 !***************************************************************************************
+
 MODULE PeriodicBoundary
 #include "preprocessoptions.cpp"
    USE FFTWrapper
@@ -33,9 +34,6 @@ MODULE PeriodicBoundary
    !> Vectors of the unit cell
    REAL, DIMENSION(3,3) :: UnitCellVector
 
-   !> Coordinates which are used in the external program, fractional or cartesian
-   LOGICAL, SAVE :: PassFractionalCoords = .TRUE.
-
    !> Matrix transformation for coordinates
    REAL, DIMENSION(3,3) :: Fractional2Cartesian, Cartesian2Fractional
 
@@ -47,10 +45,9 @@ MODULE PeriodicBoundary
                                        CONTAINS
 !============================================================================================
 
-   SUBROUTINE PBC_Setup( VectorA, VectorB, VectorC, FractionalCoords  )
+   SUBROUTINE PBC_Setup( VectorA, VectorB, VectorC  )
       IMPLICIT NONE
       REAL, DIMENSION(3), INTENT(IN) :: VectorA, VectorB, VectorC
-      LOGICAL, INTENT(IN), OPTIONAL  :: FractionalCoords
 
       ! warning if module is setup
       IF ( ModuleisSetup ) THEN
@@ -70,9 +67,6 @@ MODULE PeriodicBoundary
       Fractional2Cartesian = UnitCellVector(:,:)
       Cartesian2Fractional = TheOneWithInverseMatrix( Fractional2Cartesian, 3 ) 
 
-      ! Store external coordinates definition
-      IF ( PRESENT( FractionalCoords) )   PassFractionalCoords = FractionalCoords
-
       ! Module is now ready
       ModuleisSetup = .TRUE.
       
@@ -82,6 +76,11 @@ MODULE PeriodicBoundary
       WRITE(__LOG_UNIT,*) " PeriodicBoundary: vector A - ", UnitCellVector(:,1)
       WRITE(__LOG_UNIT,*) " PeriodicBoundary: vector B - ", UnitCellVector(:,2)
       WRITE(__LOG_UNIT,*) " PeriodicBoundary: vector C - ", UnitCellVector(:,3)
+#if defined(PASS_FRACTIONAL_COORDS) 
+      WRITE(__LOG_UNIT,"(/,A)") " PeriodicBoundary: in input and output fractional coordinates are assumed"
+#else
+      WRITE(__LOG_UNIT,"(/,A)") " PeriodicBoundary: in input and output cartesian coordinates are assumed"
+#endif
       __CLOSE_LOG_FILE
 #endif
 
@@ -110,7 +109,8 @@ MODULE PeriodicBoundary
       REAL, DIMENSION(:), INTENT(INOUT) :: X
       INTEGER, INTENT(IN), OPTIONAL     :: InputNBeads
       REAL, DIMENSION(3) :: Vector
-      INTEGER :: i, j, NBeads
+      REAL, DIMENSION(:), ALLOCATABLE :: Centroid
+      INTEGER :: i, j, NBeads, NCoord
 
       ! Return if module not have been setup yet ( NON PERIODIC SYSTEM )
       IF ( .NOT. ModuleisSetup )  RETURN 
@@ -125,30 +125,41 @@ MODULE PeriodicBoundary
       ELSE
          NBeads = 1
       END IF
+      NCoord = size(X)/NBeads
 
-      ! Cycle over the atoms
-      DO i = 1, size(X)/3
+#if !defined(PASS_FRACTIONAL_COORDS) 
+      ! Trasform to fractional coordinates
+      CALL InPlaceCartesianToFractional( X )
+#endif
 
-         ! trasform cartesian coordinates to fractional coordinates
-         IF ( PassFractionalCoords ) THEN
-            Vector = X( (i-1)*3+1 : i*3 )
-         ELSE
-            Vector = TheOneWithMatrixVectorProduct( Cartesian2Fractional, X( (i-1)*3+1 : i*3 ) )
-         END IF
+      IF ( NBeads > 1 ) THEN
 
-         ! move in first unit cell
-         Vector(1) = Vector(1) - FLOOR( Vector(1) )
-         Vector(2) = Vector(2) - FLOOR( Vector(2) )
-         Vector(3) = Vector(3) - FLOOR( Vector(3) )
+         ! Allocate memory to store the centroid of the ring polymer
+         ALLOCATE( Centroid(NCoord) )
 
-         ! trasform back coordinate to cartesian 
-         IF ( PassFractionalCoords ) THEN
-            X( (i-1)*3+1 : i*3 ) = Vector
-         ELSE
-             X( (i-1)*3+1 : i*3 ) = TheOneWithMatrixVectorProduct( Fractional2Cartesian, Vector )
-         END IF
+         ! Compute centroid of the RP
+         Centroid(:) = 0.0
+         DO i = 1, NBeads
+            Centroid(:) = Centroid(:) + X( (i-1)*NCoord+1 : i*NCoord )
+         END DO
+         Centroid(:) = Centroid(:) / NBeads
 
-      END DO
+         ! Translate ring polymer to the first unit cell
+         DO i = 1, NBeads
+            X( (i-1)*NCoord+1 : i*NCoord ) = X( (i-1)*NCoord+1 : i*NCoord ) - FLOOR( Centroid(:) )
+         END DO
+
+      ELSE IF ( NBeads == 1 ) THEN
+
+         ! Translate coordinates to the first unit cell
+         X( : ) = X( : ) - FLOOR( X(:) )
+
+      END IF
+
+#if !defined(PASS_FRACTIONAL_COORDS) 
+      ! Trasform back to cartesian coordinates
+      CALL InPlaceFractionalToCartesian( X )
+#endif
 
    END SUBROUTINE PBC_BringToFirstCell
 
@@ -158,48 +169,103 @@ MODULE PeriodicBoundary
 !*******************************************************************************
 !          FractionalToCartesian
 !*******************************************************************************
-!> Convert fractional coordinates to cartesian coordinates for X and Y. \n
-!> The coordinate along Z is left unchanged. Works only if the slab geometry has
-!> been already setup.
+!> Convert fractional coordinates to cartesian coordinates.
+!> Works only if the slab geometry has been already setup.
 !>
 !> @param      Array of dimension 3 with the fractional coordinates.
 !> @returns    Array of dimension 3 with the cartesian coordinates
 !*******************************************************************************
    FUNCTION FractionalToCartesian( Fractional ) RESULT( Cartesian )
       IMPLICIT NONE
-      REAL, DIMENSION(3) :: Cartesian
-      REAL, DIMENSION(3), INTENT(IN) :: Fractional
+      REAL, DIMENSION(:), INTENT(IN) :: Fractional
+      REAL, DIMENSION(size(Fractional)) :: Cartesian
+      INTEGER :: i
 
       ! Return if module not have been setup yet ( NON PERIODIC SYSTEM )
       IF ( .NOT. ModuleisSetup )  RETURN 
 
-      ! trasform coordinate for X and Y
-      Cartesian(1:3) = TheOneWithMatrixVectorProduct( Fractional2Cartesian, Fractional(1:3) )
+      ! Cycle over the atoms
+      DO i = 1, size(Fractional)/3
+         ! trasform fractional coordinates to cartesian coordinates
+         Cartesian( (i-1)*3+1 : i*3 ) = TheOneWithMatrixVectorProduct( Fractional2Cartesian, Fractional( (i-1)*3+1 : i*3 ) )
+      END DO
+
    END FUNCTION FractionalToCartesian
+
+!*******************************************************************************
+!          InPlaceFractionalToCartesian
+!*******************************************************************************
+!> Modification of the previous function to perform the transformation
+!> Fractional -> Cartesian coords in place.
+!>
+!> @param X     Array of dimension 3 with the fractional coordinates.
+!*******************************************************************************
+   SUBROUTINE InPlaceFractionalToCartesian( X ) 
+      IMPLICIT NONE
+      REAL, DIMENSION(:), INTENT(INOUT) :: X
+      INTEGER :: i
+
+      ! Return if module not have been setup yet ( NON PERIODIC SYSTEM )
+      IF ( .NOT. ModuleisSetup )  RETURN 
+
+      ! Cycle over the atoms
+      DO i = 1, size(X)/3
+         ! trasform fractional coordinates to cartesian coordinates
+         X( (i-1)*3+1 : i*3 ) = TheOneWithMatrixVectorProduct( Fractional2Cartesian, X( (i-1)*3+1 : i*3 ) )
+      END DO
+
+   END SUBROUTINE InPlaceFractionalToCartesian
 
 
 !*******************************************************************************
 !          CartesianToFractional
 !*******************************************************************************
-!> Convert cartesian  coordinates to fractional coordinates for X and Y. \n
-!> The coordinate along Z is left unchanged. Works only if the slab geometry has
-!> been already setup.
+!> Convert cartesian coordinates to fractional coordinates.
+!> Works only if the slab geometry has been already setup.
 !>
 !> @param      Array of dimension 3 with the cartesian coordinates
 !> @returns    Array of dimension 3 with the fractional coordinates.
 !*******************************************************************************
    FUNCTION CartesianToFractional( Cartesian ) RESULT( Fractional )
       IMPLICIT NONE
-      REAL, DIMENSION(3) :: Fractional
-      REAL, DIMENSION(3), INTENT(IN) :: Cartesian
+      REAL, DIMENSION(:), INTENT(IN) :: Cartesian
+      REAL, DIMENSION(size(Cartesian)) :: Fractional
+      INTEGER :: i
 
       ! Return if module not have been setup yet ( NON PERIODIC SYSTEM )
       IF ( .NOT. ModuleisSetup )  RETURN 
 
-      ! trasform coordinate for X and Y
-      Fractional(1:3) = TheOneWithMatrixVectorProduct( Cartesian2Fractional, Cartesian(1:3) )
+      ! Cycle over the atoms
+      DO i = 1, size(Cartesian)/3
+         ! trasform cartesian coordinates to fractional coordinates
+         Fractional( (i-1)*3+1 : i*3 ) = TheOneWithMatrixVectorProduct( Cartesian2Fractional, Cartesian( (i-1)*3+1 : i*3 ) )
+      END DO
+
    END FUNCTION CartesianToFractional
 
+!*******************************************************************************
+!          InPlaceCartesianToFractional
+!*******************************************************************************
+!> Modification of the previous function to perform the transformation
+!> Cartesian -> Fractional coords in place.
+!>
+!> @param X     Array of dimension 3 with the cartesian coordinates.
+!*******************************************************************************
+   SUBROUTINE InPlaceCartesianToFractional( X ) 
+      IMPLICIT NONE
+      REAL, DIMENSION(:), INTENT(INOUT) :: X
+      INTEGER :: i
+
+      ! Return if module not have been setup yet ( NON PERIODIC SYSTEM )
+      IF ( .NOT. ModuleisSetup )  RETURN 
+
+      ! Cycle over the atoms
+      DO i = 1, size(X)/3
+         ! trasform cartesian coordinates to fractional coordinates
+         X( (i-1)*3+1 : i*3 ) = TheOneWithMatrixVectorProduct( Cartesian2Fractional, X( (i-1)*3+1 : i*3 ) )
+      END DO
+
+   END SUBROUTINE InPlaceCartesianToFractional
 
 !============================================================================================
 

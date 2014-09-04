@@ -24,6 +24,7 @@ MODULE OutputModule
 #include "preprocessoptions.cpp"
    USE SharedData
    USE VTFFileModule
+   USE UnitConversion
 
    PRIVATE
 
@@ -32,8 +33,21 @@ MODULE OutputModule
    !> Setup variable for the module
    LOGICAL, SAVE :: OutputModuleIsSetup = .FALSE.
 
+   ! OUTPUT UNITS
+
+   INTEGER :: TrajTotEnergyUnit
+   INTEGER :: TrajCentroidXUnit
+   INTEGER :: TrajCentroidVUnit
+   INTEGER :: TrajCoordEnergyUnit
+
    !> Object to write VTF trajectory file
    TYPE( VTFFile ), SAVE :: TrajectoryVTF
+
+   ! Data formats
+   !> time vs averages, decimal format
+   CHARACTER(20), PARAMETER, PRIVATE :: FF = "(1F12.5,4(1F15.8,1X))"
+   !> time vs averages, exponential format
+   CHARACTER(20), PARAMETER, PRIVATE :: FE = "(1X,1E12.5,100(1E15.8,1X))"
 
    
 !============================================================================================
@@ -45,6 +59,7 @@ MODULE OutputModule
       CHARACTER(2), DIMENSION(:), ALLOCATABLE :: AtomsLabels
       LOGICAL, DIMENSION(:,:), ALLOCATABLE :: BondsLogical
       INTEGER :: i, j, jStart, jEnd
+      CHARACTER(50) :: OutFileName
 
       ! exit if module is setup
       IF ( OutputModuleIsSetup ) RETURN
@@ -66,6 +81,13 @@ MODULE OutputModule
       CALL VTFFile_WriteGeneralData( TrajectoryVTF, AtomsLabels, BondsLogical )
       DEALLOCATE( AtomsLabels, BondsLogical )
 
+      ! Open unit to write trajectory energy
+      TrajTotEnergyUnit = LookForFreeUnit()
+      WRITE(OutFileName,"(A,I4.4,A)") "Traj_",1,"_TotEnergy.dat"
+      OPEN( FILE=OutFileName, UNIT=TrajTotEnergyUnit )
+      WRITE(TrajTotEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
+                  // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", 1
+
       ! Module is now ready
       OutputModuleIsSetup = .TRUE.
       
@@ -73,13 +95,22 @@ MODULE OutputModule
 
 !============================================================================================
 
-   SUBROUTINE PrintOutput(  )
+   SUBROUTINE PrintOutput( Time )
       IMPLICIT NONE
+      REAL, INTENT(IN) :: Time
 
       ! Error if module not have been setup yet
       CALL ERROR( .NOT. OutputModuleIsSetup, " OutputModule.PrintOutput : Module not Setup" )
       
       CALL VTFFile_WriteTimeStep( TrajectoryVTF, X, (/ 10., 10., 10., 90., 90., 90. /) )
+
+       WRITE(TrajTotEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),           &
+                                      KinEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
+                                      PotEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
+                                      TotEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
+                                      2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits)
+
+      800 FORMAT( 1F12.5,4(1F15.8,1X) )
 
    END SUBROUTINE PrintOutput
 
@@ -92,6 +123,9 @@ MODULE OutputModule
       IF ( .NOT. OutputModuleIsSetup ) RETURN
 
       CALL VTFFile_Dispose( TrajectoryVTF )
+
+      CLOSE( UNIT=TrajTotEnergyUnit )
+
 
       OutputModuleIsSetup = .FALSE.
       
