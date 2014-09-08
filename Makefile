@@ -419,7 +419,8 @@ ${OBJDIR}/PotentialModule.o       : ${SRCDIR}/PotentialModule.f90 ${OBJDIR}/Rand
                                     ${OBJDIR}/MyLinearAlgebra.o ${OBJDIR}/PeriodicBoundary.o                       ${COMMONDEP}
 
 # Module containing the subroutines to write output to files
-${OBJDIR}/OutputModule.o          : ${SRCDIR}/OutputModule.f90 ${OBJDIR}/SharedData.o ${OBJDIR}/VTFFileModule.o    ${COMMONDEP}
+${OBJDIR}/OutputModule.o          : ${SRCDIR}/OutputModule.f90 ${OBJDIR}/SharedData.o ${OBJDIR}/VTFFileModule.o \
+                                    ${OBJDIR}/UnitConversion.o                                                     ${COMMONDEP}
 
 
 

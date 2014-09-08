@@ -129,6 +129,9 @@ MODULE UnitConversion
 !> Units which are used in read and write, in the MAIN file only.
    TYPE ( Units ), SAVE, PUBLIC :: MainUnits
 
+!> Units which are used in read and write, in the potential setup only.
+   TYPE ( Units ), SAVE, PUBLIC :: PotentialUnits
+
 
 !********************************************************************************************************
 CONTAINS

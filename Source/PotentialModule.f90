@@ -23,66 +23,274 @@
 MODULE PotentialModule
 #include "preprocessoptions.cpp"
    USE PeriodicBoundary
+   USE InputField
+   USE UnitConversion
+   USE RandomNumberGenerator
 
    PRIVATE
 
-   PUBLIC :: SetupPairPotential, DisposePotential, GetPotential
+   PUBLIC :: SetupPotential, GetInitialPositions, GetAtomsNumber, GetMasses, GetPotential, DisposePotential
 
+   !> \name SYSTEM ID
+   !> Integers number identifying the kind of potential adopted
+   !> @{
+   INTEGER, PARAMETER  ::  FREE_PARTICLES    = 0
+   INTEGER, PARAMETER  ::  LJ_PAIR_POTENTIAL = 1
+   !> @}
 
    !> Setup variable for the potential
    LOGICAL, SAVE :: PotentialModuleIsSetup = .FALSE.
 
-   !> Use model pair potential instead of on-the-fly computation of the forces
-   LOGICAL, SAVE :: ModelPotential != .FALSE.
+   !> Identificative number of the potential currently used
+   INTEGER, SAVE :: SystemNumber
 
+   !> Number of atoms of the system
+   INTEGER, SAVE :: AtomNo
+
+   !> Periodic boundary conditions Flag
+   LOGICAL, SAVE :: PBC = .FALSE.
+
+   !> Size for cubic cells
+   REAL, SAVE :: BoxSize
+
+   !> Cutoff distance for a pair potential
+   REAL, SAVE   :: CutOff = 100.0
    !> How many neighbour atoms are included in the pair potential summation
    INTEGER, SAVE :: NearPeriodicImages = 0
    !> Lattice translations of the near neighbour cells
    REAL, DIMENSION(:,:), ALLOCATABLE :: NearTranslations
-   !> Cutoff distance of the pair potential
-   REAL, SAVE   :: CutOff = 100.0
 
-
-   !> Number of atoms of the system
-   INTEGER, SAVE :: AtomNo
-   
    !> \name LENNARD-JONES POTENTIAL PARAMETERS
    !> Parameters of the Lennard-Jones pair potential
    !> @{
    REAL, SAVE :: LJ_WellDepth = 1.0       !< Potential well depth (energy)
    REAL, SAVE :: LJ_EquilDist = 1.0       !< Potential equilibrium distance (lenght)
    !> @}
-   
-   
+
+
 !============================================================================================
                                        CONTAINS
 !============================================================================================
 
-   SUBROUTINE SetupPairPotential( N, WellDepth, EquilDist, PBC  )
+   SUBROUTINE SetupPotential( PotentialFileName )
       IMPLICIT NONE
-      INTEGER, INTENT(IN) :: N
-      REAL, INTENT(IN)    :: WellDepth, EquilDist
-      LOGICAL, INTENT(IN) :: PBC
-      INTEGER :: i, j, k
-      REAL, DIMENSION(3,125) :: TmpNearTranslations
-      REAL, DIMENSION(3) :: Vector
-      REAL :: Distance
+      CHARACTER(*), INTENT(IN)   :: PotentialFileName
+
+      CHARACTER(100)    :: ErrorMsg
+      TYPE(InputFile)   :: PotentialData
+      INTEGER           :: InputLength, InputEnergy, InputMass       ! Units of input data, defined from the input file
 
       ! exit if module is setup
       IF ( PotentialModuleIsSetup ) RETURN
 
-      ! use model potential
-      ModelPotential = .TRUE.
+      ! Open potential input file
+      CALL OpenFile( PotentialData, PotentialFileName )
 
-      ! Set the number of atoms of the system
-      AtomNo = N
+      ! Read input unit
+      CALL SetFieldFromInput( PotentialData, "InputLength", InputLength,  1 )
+      CALL SetFieldFromInput( PotentialData, "InputEnergy", InputEnergy,  3 )
+      CALL SetFieldFromInput( PotentialData, "InputMass", InputMass,  8 )
+      ! Setup conversion factors from potential to internal units
+      CALL Initialize_UnitConversion( PotentialUnits, InputLength, InputEnergy, InputMass, 11, 12, 15, 17 )
+
+      ! Read system number
+      CALL SetFieldFromInput( PotentialData, "SystemNumber", SystemNumber )
+
+      ! Check if the potential id number is valid
+      WRITE(ErrorMsg,*) " PotentialModule.SetupPotential : no potential corresponds to Id = ", SystemNumber
+      CALL ERROR ( .NOT. PotentialIdExists(SystemNumber),  ErrorMsg )
+
+      ! Depending on system number, different setup operations
+      SELECT CASE( SystemNumber )
+
+         ! Gas of free particles
+         CASE( FREE_PARTICLES )
+
+            ! number of particles
+            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
+            ! periodic system
+            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
+            ! Size of the simulation box
+            IF ( PBC ) THEN
+               CALL SetFieldFromInput( PotentialData, "BoxSize", BoxSize )
+               CALL PBC_Setup( (/ BoxSize, 0.0, 0.0 /), (/ 0.0, BoxSize, 0.0 /), (/ 0.0, 0.0, BoxSize /) )
+            END IF
+
+         ! Gas of LJ particles
+         CASE( LJ_PAIR_POTENTIAL )
+
+            ! number of particles
+            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
+            ! periodic system
+            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
+            ! Size of the simulation box
+            IF ( PBC ) THEN
+               CALL SetFieldFromInput( PotentialData, "BoxSize", BoxSize )
+               CALL PBC_Setup( (/ BoxSize, 0.0, 0.0 /), (/ 0.0, BoxSize, 0.0 /), (/ 0.0, 0.0, BoxSize /) )
+            END IF
+
+            ! Store the pair potential parameters
+            CALL SetFieldFromInput( PotentialData, "WellDepth", LJ_WellDepth )
+            CALL SetFieldFromInput( PotentialData, "EquilDist", LJ_EquilDist )
+            LJ_WellDepth = LJ_WellDepth * EnergyConversion( PotentialUnits, InternalUnits )
+            LJ_EquilDist = LJ_EquilDist * LengthConversion( PotentialUnits, InternalUnits )
+
+            ! Set the cutoff distance of the pair potential
+            CALL SetFieldFromInput(PotentialData,"CutOff",CutOff,LJ_EquilDist*LengthConversion(InternalUnits,PotentialUnits)*6.0)
+            CutOff = CutOff * LengthConversion( PotentialUnits, InternalUnits )
+
+            ! Check how many image atoms should be included in the pair potential summation
+            CALL SetNearTranslations( )
+
+      END SELECT
+
+      ! close input file
+      CALL CloseFile( PotentialData )
+
+      ! Module is now ready
+      PotentialModuleIsSetup = .TRUE.
+
+   END SUBROUTINE SetupPotential
+
+!============================================================================================
+
+   LOGICAL FUNCTION PotentialIdExists( IdNr )
+      IMPLICIT NONE
+      INTEGER, INTENT(IN) :: IdNr
+
+      PotentialIdExists =  ( ( IdNr == FREE_PARTICLES ) .OR.  &
+                            ( IdNr == LJ_PAIR_POTENTIAL ) )
+
+   END FUNCTION PotentialIdExists
+
+!============================================================================================
+
+   SUBROUTINE GetInitialPositions( X, RandomNr )
+      IMPLICIT NONE
+      REAL, DIMENSION(:), INTENT(OUT) :: X
+      TYPE(RNGInternalState)          :: RandomNr
+      INTEGER :: i, j
+      REAL :: MinDistance, Distance
+      REAL, DIMENSION(3) :: VecDist
+
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.InitialPositions : Module not Setup" )
+
+      ! Check dimension of subroutine argument
+      CALL ERROR( SIZE(X) /= 3*AtomNo,    " PotentialModule.InitialPositions : wrong dimension of coordinate array " )
+
+      ! Depending on system number, different initialization operations
+      SELECT CASE( SystemNumber )
+
+         ! Setup general parameters
+         CASE( FREE_PARTICLES, LJ_PAIR_POTENTIAL )
+
+            X( 1 ) = UniformRandomNr( RandomNr ) * BoxSize
+            X( 2 ) = UniformRandomNr( RandomNr ) * BoxSize
+            X( 3 ) = UniformRandomNr( RandomNr ) * BoxSize
+
+            DO i = 2, AtomNo
+               X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * BoxSize
+               X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * BoxSize
+               X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * BoxSize
+
+               DO
+                  MinDistance = 1000.0
+                  DO j = 1, i-1
+                     VecDist = X( (i-1)*3+1 : i*3 ) - X( (j-1)*3+1 : j*3 )
+                     Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
+                     MinDistance = MIN( MinDistance, Distance )
+                  END DO
+                  IF  ( MinDistance > 2.5 ) EXIT
+                  X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * BoxSize
+                  X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * BoxSize
+                  X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * BoxSize
+               END DO
+            END DO
+
+      END SELECT
+
+   END SUBROUTINE GetInitialPositions
+
+!============================================================================================
+
+   INTEGER FUNCTION GetAtomsNumber( )
+      IMPLICIT NONE
+
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetDOFNumber : Module not Setup" )
+
+      GetAtomsNumber = AtomNo
+
+   END FUNCTION GetAtomsNumber
+
+!============================================================================================
+
+   FUNCTION GetMasses( )
+      IMPLICIT NONE
+      REAL, DIMENSION( 3*AtomNo ) :: GetMasses
+
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetMasses : Module not Setup" )
+
+      ! Depending on system number, different operations
+      SELECT CASE( SystemNumber )
+
+         CASE( FREE_PARTICLES, LJ_PAIR_POTENTIAL )
+            GetMasses(:) = 1.0 * MassConversion(PotentialUnits, InternalUnits)
+
+      END SELECT
+
+   END FUNCTION GetMasses
+
+!============================================================================================
+
+   REAL FUNCTION GetPotential( X, Force )
+      IMPLICIT NONE
+      REAL, DIMENSION(:), TARGET, INTENT(IN)  :: X
+      REAL, DIMENSION(:), TARGET, INTENT(OUT) :: Force
+
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetPotential : Module not Setup" )
+
+      ! Check dimension of function arguments
+      CALL ERROR( SIZE(X) /= 3*AtomNo,    " PotentialModule.GetPotential : wrong dimension of coordinate array " )
+      CALL ERROR( SIZE(X) /= SIZE(Force), " PotentialModule.GetPotential : wrong dimension of forces array " )
       
-      ! Store the pair potential parameters
-      LJ_WellDepth = WellDepth
-      LJ_EquilDist = EquilDist
+      ! Depending on system number, different operations
+      SELECT CASE( SystemNumber )
 
-      ! Set the cutoff distance of the pair potential
-      CutOff = EquilDist * 6.0
+         CASE( FREE_PARTICLES )
+            GetPotential = 0.0
+            Force(:) = 0.0
+
+         CASE( LJ_PAIR_POTENTIAL )
+            CALL PairPotential( X(:), GetPotential, Force(:) )
+
+      END SELECT
+
+   END FUNCTION GetPotential
+
+!============================================================================================
+
+   SUBROUTINE DisposePotential(  )
+      IMPLICIT NONE
+
+      ! exit if module is not setup
+      IF ( .NOT. PotentialModuleIsSetup ) RETURN
+
+      PotentialModuleIsSetup = .FALSE.
+      
+   END SUBROUTINE DisposePotential
+
+!============================================================================================
+
+   SUBROUTINE SetNearTranslations( )
+      IMPLICIT NONE
+      INTEGER :: i, j, k
+      REAL, DIMENSION(3,125) :: TmpNearTranslations
+      REAL, DIMENSION(3) :: Vector
+      REAL :: Distance
 
       IF ( PBC ) THEN
          ! Define how many neighbour cells are checked in the pair potential summation
@@ -106,46 +314,7 @@ MODULE PotentialModule
          NearTranslations(:,1) =  (/ 0., 0., 0. /) 
       ENDIF
 
-      ! Module is now ready
-      PotentialModuleIsSetup = .TRUE.
-      
-   END SUBROUTINE SetupPairPotential
-
-!============================================================================================
-
-   REAL FUNCTION GetPotential( X, Force )
-      IMPLICIT NONE
-      REAL, DIMENSION(:), TARGET, INTENT(IN)  :: X
-      REAL, DIMENSION(:), TARGET, INTENT(OUT) :: Force
-
-      ! Error if module not have been setup yet
-      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetPotential : Module not Setup" )
-
-      ! Check dimension of function arguments
-      CALL ERROR( SIZE(X) /= 3*AtomNo,    " PotentialModule.GetPotential : wrong dimension of coordinate array " )
-      CALL ERROR( SIZE(X) /= SIZE(Force), " PotentialModule.GetPotential : wrong dimension of forces array " )
-      
-      ! If model potential, use lennard-jones pair potential
-      IF ( ModelPotential ) THEN
-         CALL PairPotential( X(:), GetPotential, Force(:) )
-
-      ELSE IF ( .NOT.  ModelPotential ) THEN
-         CALL AbortWithError( " GetPotential: true potential is not yet available " )
-      END IF
-      
-   END FUNCTION GetPotential
-
-!============================================================================================
-
-   SUBROUTINE DisposePotential(  )
-      IMPLICIT NONE
-
-      ! exit if module is not setup
-      IF ( .NOT. PotentialModuleIsSetup ) RETURN
-
-      PotentialModuleIsSetup = .FALSE.
-      
-   END SUBROUTINE DisposePotential
+   END SUBROUTINE SetNearTranslations
 
 !============================================================================================
 
@@ -186,10 +355,10 @@ MODULE PotentialModule
 
                ! Update forces
                Forces( (iAtom-1)*3+1 ) = Forces( (iAtom-1)*3+1 ) - LJDerivative * ( TranslatedDist(1) ) / Distance
-               Forces( (iAtom-1)*3+2 ) = Forces( (iAtom-1)*3+3 ) - LJDerivative * ( TranslatedDist(2) ) / Distance
+               Forces( (iAtom-1)*3+2 ) = Forces( (iAtom-1)*3+2 ) - LJDerivative * ( TranslatedDist(2) ) / Distance
                Forces(  iAtom*3      ) = Forces(  iAtom*3      ) - LJDerivative * ( TranslatedDist(3) ) / Distance
                Forces( (jAtom-1)*3+1 ) = Forces( (jAtom-1)*3+1 ) + LJDerivative * ( TranslatedDist(1) ) / Distance
-               Forces( (jAtom-1)*3+2 ) = Forces( (jAtom-1)*3+3 ) + LJDerivative * ( TranslatedDist(2) ) / Distance
+               Forces( (jAtom-1)*3+2 ) = Forces( (jAtom-1)*3+2 ) + LJDerivative * ( TranslatedDist(2) ) / Distance
                Forces(  jAtom*3      ) = Forces(  jAtom*3      ) + LJDerivative * ( TranslatedDist(3) ) / Distance
 
             END DO

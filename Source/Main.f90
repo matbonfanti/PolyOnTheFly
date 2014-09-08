@@ -169,6 +169,7 @@ PROGRAM PolyOnTheFly
    
    CALL Setup( )
 
+!    CALL CheckForces( )
 
    !*************************************************************
    !         RUN SECTION 
@@ -186,7 +187,7 @@ PROGRAM PolyOnTheFly
       ! *************  Initial conditions of the system *****************
       ! DEFINE APPROPRIATE INITIAL CONDITIONS 
       X(:) = 0.0;  V(:) = 0.0
-      X( 1 : NDim ) = RandomCoordinates( NAtoms, 10.0 )
+      CALL GetInitialPositions( X( 1 : NDim ), RandomNr )
       DO iCoord = 2, NBeads
          X( NDim*(iCoord-1)+1 : NDim*iCoord ) = X( 1 : NDim ) 
       END DO
@@ -322,27 +323,21 @@ PROGRAM PolyOnTheFly
    SUBROUTINE Setup( )
       IMPLICIT NONE
       REAL :: WellDepth, EquilDist
-      
-      ! Initialize random number seed
-      CALL SetSeed( RandomNr, -(245+CurrentMPITask) )
 
-      ! >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-      ! IN THE FINAL VERSION OF THE CODE THE ATOMIC SYSTEM DATA
-      ! WILL BE READ HERE FROM THE APPROPRIATE INPUT FILE !!!
-      NAtoms = 1
-      NDim = 3*NAtoms
-      WellDepth = 1.0 * EnergyConversion(InputUnits, InternalUnits)
-      EquilDist = 1.0 * LengthConversion(InputUnits, InternalUnits)
-      
-      ! Setup periodic boundary conditions
-      CALL PBC_Setup( (/10.0, 0., 0./), (/0.0, 10., 0./), (/0.0, 0., 10./)  )
-      ! Setup potential energy subroutines
-      CALL  SetupPairPotential( NAtoms, WellDepth, EquilDist, .TRUE. )
+      ! Initialize random number seed
+      CALL SetSeed( RandomNr, -CurrentMPITask )
+
+      ! Initialize system parameters and potential related subroutines
+      CALL SetupPotential( "potential.dat" )
+
+      ! Get the dimension of the system to allocate memory
+      NAtoms = GetAtomsNumber( )
+      NDim = 3*Natoms
       
       ! Allocate memory to store the mass vector
       ALLOCATE( MassVector(NDim) )
       ! Define masses of the system
-      MassVector = 1.0 * MassConversion(InputUnits, InternalUnits)
+      MassVector = GetMasses( )
       
       ! Allocate memory and initialize vectors for trajectory, acceleration and masses
       ALLOCATE( X(NDim*NBeads), V(NDim*NBeads), A(NDim*NBeads) )
@@ -350,7 +345,7 @@ PROGRAM PolyOnTheFly
       ! Set variables for EOM integration in the microcanonical ensamble 
       CALL EvolutionSetup( MolecularDynamics, NDim, MassVector, TimeStep )
       ! Set ring polymer molecular dynamics parameter
-      CALL SetupRingPolymer( MolecularDynamics, NBeads, BeadsFrequency ) 
+      IF ( NBeads > 1 ) CALL SetupRingPolymer( MolecularDynamics, NBeads, BeadsFrequency ) 
 
       ! Set transform from ring coordinates to normal modes
       CALL SetupFFT( RingNormalModes, NBeads ) 
@@ -383,7 +378,7 @@ PROGRAM PolyOnTheFly
       IF ( NBeads > 1 ) THEN
          CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
       ELSE
-         CALL EOM_LangevinSecondOrder( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+         PotEnergy = GetPotential( X, A )
       END IF
 
       kStep = 0
@@ -392,7 +387,7 @@ PROGRAM PolyOnTheFly
 
          ! Bring the atomic coordinates to the first unit cell
          CALL PBC_BringToFirstCell( X, NBeads )
-      
+
          IF ( MOD(iStep-1, EquilPrintStepInterval) == 0.0 ) THEN
 
             ! New print step of the equilibration
@@ -436,7 +431,11 @@ PROGRAM PolyOnTheFly
       CALL PBC_BringToFirstCell( X, NBeads )
 
       ! Compute starting potential and forces
-      CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A,  GetPotential, PotEnergy, RandomNr, 1 )
+      IF ( NBeads > 1 ) THEN
+         CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
+      ELSE
+         PotEnergy = GetPotential( X, A )
+      END IF
 
       ! cycle over nstep velocity verlet iterations
       DO iStep = 1,NrSteps
@@ -460,8 +459,12 @@ PROGRAM PolyOnTheFly
 
          END IF 
 
-         ! Propagate for one timestep
-         CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
+         ! Propagate for one timestep with Velocity-Verlet
+         IF ( NBeads > 1 ) THEN
+            CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+         ELSE
+            CALL EOM_LangevinSecondOrder( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+         END IF
 
       END DO
 
@@ -626,50 +629,42 @@ PROGRAM PolyOnTheFly
       
    ! ===================================================================================================
 
-   FUNCTION RandomCoordinates( NAtoms, UnitCell  ) RESULT(X)
+   SUBROUTINE CheckForces( )
       IMPLICIT NONE
-      INTEGER, INTENT(IN)       :: NAtoms
-      REAL, INTENT(IN)          :: UnitCell
-      REAL, DIMENSION(3*NAtoms) :: X
-      INTEGER :: i, j
-      REAL :: MinDistance, Distance
-      REAL, DIMENSION(3) :: VecDist
 
-      X( 1 ) = UniformRandomNr( RandomNr ) * UnitCell
-      X( 2 ) = UniformRandomNr( RandomNr ) * UnitCell
-      X( 3 ) = UniformRandomNr( RandomNr ) * UnitCell
+      REAL, DIMENSION(:), ALLOCATABLE :: ForceAnalytic, ForceNumeric, XpD, XmD
+      REAL :: VpD, VmD
+      INTEGER :: i
 
-      DO i = 2, NAtoms
-         X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell
-         X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell
-         X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell
+      ALLOCATE( ForceAnalytic(NDim), ForceNumeric(NDim), XpD(NDim), XmD(NDim) )
+      CALL GetInitialPositions( X,  RandomNr ) 
+      VpD =  GetPotential( X, ForceAnalytic )
 
-         DO
-            MinDistance = 1000.0
-            DO j = 1, i-1
-               VecDist = X( (i-1)*3+1 : i*3 ) - X( (j-1)*3+1 : j*3 )
-               Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
-               MinDistance = MIN( MinDistance, Distance )
-            END DO
-            IF  ( MinDistance > 1.5 ) EXIT
-            X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * UnitCell
-            X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * UnitCell
-            X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * UnitCell
-         END DO
+      PRINT*, " ANALYTIC FORCE "
+      PRINT*, ForceAnalytic
+      PRINT*, " "
+      DO i = 1, size(X)
+         XpD = X
+         XpD(i) = X(i) + 0.00001
+         XmD = X
+         XmD(i) = X(i) - 0.00001
+         VpD = GetPotential( XpD, ForceAnalytic )
+         VmD = GetPotential( XmD, ForceAnalytic )
+         ForceNumeric(i) = - ( VpD - VmD ) / 2.0 / 0.00001
+      END DO
+      
+      PRINT*, " NUMERIC FORCE "
+      PRINT*, ForceNumeric
+      PRINT*, " "
+
+      PRINT*, " % DIFFERENCE "
+      DO i = 1, size(X)
+         WRITE(*,"(1F20.6)") ABS(ForceNumeric(i) - ForceAnalytic(i))/ABS(ForceNumeric(i))*100.
       END DO
 
-!       DO i = 1, NAtoms
-!          DO j = i+1, NAtoms
-! 
-!                VecDist = X( (i-1)*3+1 : i*3 ) - X( (j-1)*3+1 : j*3 )
-!                Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
-!                PRINT*, Distance
-! 
-!          END DO
-!       END DO
-!       STOP
+      STOP
 
-   END FUNCTION RandomCoordinates
+   END SUBROUTINE CheckForces
 
 
    END PROGRAM PolyOnTheFly
