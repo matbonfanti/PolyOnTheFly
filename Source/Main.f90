@@ -57,7 +57,7 @@ PROGRAM PolyOnTheFly
    ! MPI data
    INTEGER :: CurrentMPITask = 0
    
-   INTEGER :: iTraj, iCoord
+   INTEGER :: iCoord
    
    ! 1) INPUT SECTION
    !    read info about the molecular system
@@ -183,26 +183,10 @@ PROGRAM PolyOnTheFly
       PRINT "(A,I4)", "            Trajectory Nr. ", iTraj
       PRINT "(A,/)" , "***************************************************"
 
-     
-      ! *************  Initial conditions of the system *****************
-      ! DEFINE APPROPRIATE INITIAL CONDITIONS 
-      X(:) = 0.0;  V(:) = 0.0
-      CALL GetInitialPositions( X( 1 : NDim ), RandomNr )
-      DO iCoord = 2, NBeads
-         X( NDim*(iCoord-1)+1 : NDim*iCoord ) = X( 1 : NDim ) 
-      END DO
-
-!       DO iCoord = 1, NDim*NBeads
-!          X(iCoord) = X(iCoord) + UniformRandomNr( RandomNr ) * 0.5
-!       END DO
-
-      ! >>> ONLY MAIN SHOULD EXECUTE THE FOLLOWING CALL
-      CALL SetupOutput()
+      CALL InitializeTrajectory()
 
       CALL Thermalization( )
       CALL DynamicsRun( )
-
-      CALL DisposeOutput( )
 
    END DO
    
@@ -365,21 +349,48 @@ PROGRAM PolyOnTheFly
       
    ! ===================================================================================================
 
+   SUBROUTINE InitializeTrajectory( )
+      IMPLICIT NONE
+
+      ! *************  Initial conditions of the system *****************
+      ! DEFINE APPROPRIATE INITIAL CONDITIONS 
+      X(:) = 0.0;  V(:) = 0.0
+      CALL GetInitialPositions( X( 1 : NDim ), RandomNr )
+      DO iCoord = 2, NBeads
+         X( NDim*(iCoord-1)+1 : NDim*iCoord ) = X( 1 : NDim ) 
+      END DO
+
+!       DO iCoord = 1, NDim*NBeads
+!          X(iCoord) = X(iCoord) + UniformRandomNr( RandomNr ) * 0.5
+!       END DO
+
+      ! >>> ONLY MAIN SHOULD EXECUTE THE FOLLOWING CALL
+      CALL SingleTrajectoryOutput( SETUP_OUTPUT )
+
+   END SUBROUTINE InitializeTrajectory
+
+   ! ===================================================================================================
+
    SUBROUTINE Thermalization( )
       IMPLICIT NONE
       INTEGER :: iStep, kStep
-      
-      PRINT "(/,A)", " Propagating system in the canonical ensamble with PILE ... " 
+      REAL    :: KinTimeAverage, KinTimeStDev
+
 
       ! Bring the atomic coordinates to the first unit cell
       CALL PBC_BringToFirstCell( X, NBeads )
 
       ! Initialize forces
       IF ( NBeads > 1 ) THEN
+         PRINT "(/,A)", " Propagating system in the canonical ensamble with PILE ... " 
          CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
       ELSE
+         PRINT "(/,A)", " Propagating system in the canonical ensamble with symplectic propagator ... " 
          PotEnergy = GetPotential( X, A )
       END IF
+
+      KinTimeAverage = 0.0
+      KinTimeStDev   = 0.0
 
       kStep = 0
       ! Cycle over the equilibration steps
@@ -388,22 +399,37 @@ PROGRAM PolyOnTheFly
          ! Bring the atomic coordinates to the first unit cell
          CALL PBC_BringToFirstCell( X, NBeads )
 
-         IF ( MOD(iStep-1, EquilPrintStepInterval) == 0.0 ) THEN
+         IF ( MOD(iStep-1, EquilPrintStepInterval) == 0.0 .OR. iStep == EquilNrSteps ) THEN
 
             ! New print step of the equilibration
             kStep = kStep + 1
 
+            ! Update time value
+            Time = (iStep-1)*EquilTimeStep
+
             ! Compute average energies
             CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
             TotEnergy = PotEnergy + KinEnergy
+            IF ( NBeads > 1 ) THEN
+               ! compute mechanical energy of the ring polymer
+               RPKinEnergy = EOM_KineticEnergy( InitialConditions, V )
+               RPTotEnergy = RPKinEnergy + NBeads * PotEnergy
+            END IF
             ! Compute coordinate and velocity centroid
             CentroidPos = CentroidCoord( X )
-            CentroidVel = CentroidCoord( V )     
+            CentroidVel = CentroidCoord( V )
+            ! Compute time average of kinetic energy
+            IF ( NBeads > 1 ) THEN
+               KinTimeAverage = KinTimeAverage + RPKinEnergy
+               KinTimeStDev   = KinTimeStDev   + RPKinEnergy**2
+            ELSE
+               KinTimeAverage = KinTimeAverage + KinEnergy
+               KinTimeStDev   = KinTimeStDev   + KinEnergy**2
+            END IF
 
-            CALL PrintOutput( (iStep-1)*EquilTimeStep )
+            ! Print istantaneous values of the trajectory
+            CALL SingleTrajectoryOutput( PRINT_OUTPUT )
 
-!                WRITE(746,"(I10,10F20.8)") kStep, (PotEnergy+KinEnergy)*EnergyConversion(InternalUnits,InputUnits), &
-!                      PotEnergy*EnergyConversion(InternalUnits,InputUnits), KinEnergy*EnergyConversion(InternalUnits,InputUnits)
          END IF
       
          ! Propagate for one timestep with Velocity-Verlet
@@ -416,6 +442,15 @@ PROGRAM PolyOnTheFly
       END DO
       
       PRINT "(A)", " Thermalization completed! "
+
+      ! Write to the output file a separation between equilibration and dynamics
+      CALL SingleTrajectoryOutput( DIVIDE_EQ_DYN )
+
+      600 FORMAT (/, " Average values of the thermalization dynamics "   ,/,  &
+                     " * Kinetic Energy "                                ,/,  &
+                     "     average                          ",1F10.4,1X,A,/,  &
+                     "     standard deviation               ",1F10.4,1X,A,/,  &
+                     " * Temperature (time average)         ",1F10.4,1X,A,/) 
 
    END SUBROUTINE Thermalization
 
@@ -432,7 +467,7 @@ PROGRAM PolyOnTheFly
 
       ! Compute starting potential and forces
       IF ( NBeads > 1 ) THEN
-         CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
+         CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
       ELSE
          PotEnergy = GetPotential( X, A )
       END IF
@@ -444,31 +479,58 @@ PROGRAM PolyOnTheFly
          CALL PBC_BringToFirstCell( X, NBeads )
 
          ! output to write every nprint steps 
-         IF ( mod(iStep-1,PrintStepInterval) == 0 ) THEN
+         IF ( mod(iStep-1,PrintStepInterval) == 0 .OR. iStep == NrSteps ) THEN
 
             ! increment counter for printing steps
             kStep = kStep+1
 
+            ! Update time value
+            Time = (iStep-1)*TimeStep
+
             ! Compute average energies
             CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
+            TotEnergy = PotEnergy + KinEnergy
+            IF ( NBeads > 1 ) THEN
+               ! compute mechanical energy of the ring polymer
+               RPKinEnergy = EOM_KineticEnergy( MolecularDynamics, V )
+               RPTotEnergy = RPKinEnergy + NBeads * PotEnergy
+            END IF
             ! Compute coordinate and velocity centroid
             CentroidPos = CentroidCoord( X )
             CentroidVel = CentroidCoord( V )               
-            
-            CALL PrintOutput( (iStep-1)*TimeStep )
+
+            ! Print istantaneous values of the trajectory
+            CALL SingleTrajectoryOutput( PRINT_OUTPUT )
 
          END IF 
 
          ! Propagate for one timestep with Velocity-Verlet
          IF ( NBeads > 1 ) THEN
-            CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+            CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
          ELSE
-            CALL EOM_LangevinSecondOrder( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+            CALL EOM_LangevinSecondOrder( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
          END IF
 
       END DO
 
       PRINT "(A)", " Time propagation completed! "
+
+      ! Close output file
+      CALL SingleTrajectoryOutput( CLOSE_OUTPUT )
+
+      601 FORMAT (/, " Initial condition of the MD trajectory        "   ,/,  &
+                     " (for RP, full ring polymer hamiltonian)       "   ,/,  &
+                     " * Kinetic Energy                     ",1F10.4,1X,A,/,  &
+                     " * Potential Energy                   ",1F10.4,1X,A,/,  &
+                     " * Total Energy                       ",1F10.4,1X,A,/,  &
+                     " * Istantaneous Temperature           ",1F10.4,1X,A,/) 
+
+      602 FORMAT (/, " Final condition of the MD trajectory          "   ,/,  &
+                     " (for RP, full ring polymer hamiltonian)       "   ,/,  &
+                     " * Kinetic Energy                     ",1F10.4,1X,A,/,  &
+                     " * Potential Energy                   ",1F10.4,1X,A,/,  &
+                     " * Total Energy                       ",1F10.4,1X,A,/,  &
+                     " * Istantaneous Temperature           ",1F10.4,1X,A,/) 
 
    END SUBROUTINE DynamicsRun
 

@@ -26,16 +26,34 @@ MODULE OutputModule
    USE VTFFileModule
    USE UnitConversion
 
+   ! LIST OF OUTPUT FILES THAT ARE WRITTEN BY THE FOLLOWING SUBROUTINES:
+
+   ! A) SINGLE TRAJECTORY FILES ( 1 file per each trajectory )
+   !    1) VTF trajectory file (trajectory snapshots in VTF format, using VTFFileModule)
+   !    2) Total energy file (istantaneous value of kin, pot, total energy and temperature of the trajectory)
+
+   ! B) AVERAGE VALUE FILES ( 1 file per each simulation )
+   !    1) 
+
    PRIVATE
 
-   PUBLIC :: SetupOutput, PrintOutput, DisposeOutput
+   PUBLIC :: SingleTrajectoryOutput
 
-   !> Setup variable for the module
-   LOGICAL, SAVE :: OutputModuleIsSetup = .FALSE.
+   !> \name ACTIONS
+   !> Integers number identifying the kind of action to be performed by the subroutines
+   !> @{
+   INTEGER, PARAMETER, PUBLIC  ::  SETUP_OUTPUT  = 1
+   INTEGER, PARAMETER, PUBLIC  ::  PRINT_OUTPUT  = 2
+   INTEGER, PARAMETER, PUBLIC  ::  CLOSE_OUTPUT  = 3
+   INTEGER, PARAMETER, PUBLIC  ::  DIVIDE_EQ_DYN = 4
+   !> @}
+
+   !> Setup variable for the output of the current single trajectory values
+   LOGICAL, SAVE :: WritingCurrentTrajectory = .FALSE.
 
    ! OUTPUT UNITS
-
    INTEGER :: TrajTotEnergyUnit
+   INTEGER :: TrajRingPolymerEnergyUnit
    INTEGER :: TrajCentroidXUnit
    INTEGER :: TrajCentroidVUnit
    INTEGER :: TrajCoordEnergyUnit
@@ -54,82 +72,149 @@ MODULE OutputModule
                                        CONTAINS
 !============================================================================================
 
-   SUBROUTINE SetupOutput(   )
+
+   SUBROUTINE SingleTrajectoryOutput( Action )
       IMPLICIT NONE
+      INTEGER, INTENT(IN)  ::  Action
       CHARACTER(2), DIMENSION(:), ALLOCATABLE :: AtomsLabels
       LOGICAL, DIMENSION(:,:), ALLOCATABLE :: BondsLogical
       INTEGER :: i, j, jStart, jEnd
       CHARACTER(50) :: OutFileName
 
-      ! exit if module is setup
-      IF ( OutputModuleIsSetup ) RETURN
+      SELECT CASE( Action )
 
-      ! Open output files
-      
-      ! Initialize object to print the RPMD trajectory in VTF format for VMD
-      CALL VTFFile_Setup( TrajectoryVTF, "RPMDTrajectory" )
-      ! Write header section of the VTF file 
-      ALLOCATE( AtomsLabels(NAtoms*NBeads), BondsLogical(NAtoms*NBeads,NAtoms*NBeads) )
-      AtomsLabels(:) = "H "
-      BondsLogical(:,:) = .FALSE.
-      DO i = 1, NAtoms
-         DO j = 1, NBeads-1
-            BondsLogical( i+j*NAtoms, i+(j-1)*NAtoms ) = .TRUE.
-         END DO
-         BondsLogical( i+(NBeads-1)*NAtoms, i ) = .TRUE.
-      END DO
-      CALL VTFFile_WriteGeneralData( TrajectoryVTF, AtomsLabels, BondsLogical )
-      DEALLOCATE( AtomsLabels, BondsLogical )
+!******************************************************************************************************
+         CASE(SETUP_OUTPUT)
+!******************************************************************************************************
 
-      ! Open unit to write trajectory energy
-      TrajTotEnergyUnit = LookForFreeUnit()
-      WRITE(OutFileName,"(A,I4.4,A)") "Traj_",1,"_TotEnergy.dat"
-      OPEN( FILE=OutFileName, UNIT=TrajTotEnergyUnit )
-      WRITE(TrajTotEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
-                  // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", 1
+            ! Check if current trajectory output has correct status
+            CALL ERROR( WritingCurrentTrajectory, &
+                     " OutputModule.SingleTrajectoryOutput: already writing output for current trajectory" )
 
-      ! Module is now ready
-      OutputModuleIsSetup = .TRUE.
-      
-   END SUBROUTINE SetupOutput
+            ! Initialize object to print the RPMD trajectory in VTF format for VMD
+            WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_RPMDTrajectory"
+            CALL VTFFile_Setup( TrajectoryVTF, OutFileName )
+            ! Write header section of the VTF file 
+            ALLOCATE( AtomsLabels(NAtoms*NBeads), BondsLogical(NAtoms*NBeads,NAtoms*NBeads) )
+            AtomsLabels(:) = "H "
+            BondsLogical(:,:) = .FALSE.
+            DO i = 1, NAtoms
+               DO j = 1, NBeads-1
+                  BondsLogical( i+j*NAtoms, i+(j-1)*NAtoms ) = .TRUE.
+               END DO
+               BondsLogical( i+(NBeads-1)*NAtoms, i ) = .TRUE.
+            END DO
+            CALL VTFFile_WriteGeneralData( TrajectoryVTF, AtomsLabels, BondsLogical )
+            DEALLOCATE( AtomsLabels, BondsLogical )
 
-!============================================================================================
+            ! Open unit to write trajectory energy
+            TrajTotEnergyUnit = LookForFreeUnit()
+            WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_TotEnergy.dat"
+            OPEN( FILE=OutFileName, UNIT=TrajTotEnergyUnit )
+            WRITE(TrajTotEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
+                  // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", iTraj
+            WRITE(TrajTotEnergyUnit, "(A)") "# Langevin equilibration "
 
-   SUBROUTINE PrintOutput( Time )
-      IMPLICIT NONE
-      REAL, INTENT(IN) :: Time
+            IF ( NBeads > 1 ) THEN
+               ! Open unit to write trajectory energy
+               TrajRingPolymerEnergyUnit = LookForFreeUnit()
+               WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_RPEnergy.dat"
+               OPEN( FILE=OutFileName, UNIT=TrajRingPolymerEnergyUnit )
+               WRITE(TrajRingPolymerEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
+                     // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", iTraj
+               WRITE(TrajRingPolymerEnergyUnit, "(A)") "# Langevin equilibration "
+            END IF
 
-      ! Error if module not have been setup yet
-      CALL ERROR( .NOT. OutputModuleIsSetup, " OutputModule.PrintOutput : Module not Setup" )
-      
-      CALL VTFFile_WriteTimeStep( TrajectoryVTF, X, (/ 10., 10., 10., 90., 90., 90. /) )
+            ! Now update status variable
+            WritingCurrentTrajectory = .TRUE.
 
-       WRITE(TrajTotEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),           &
-                                      KinEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
-                                      PotEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
-                                      TotEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
-                                      2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits)
+!******************************************************************************************************
+         CASE(PRINT_OUTPUT)
+!******************************************************************************************************
 
+            ! Check if current trajectory output has correct status
+            CALL ERROR( .NOT. WritingCurrentTrajectory, &
+                     " OutputModule.SingleTrajectoryOutput: output for current trajectory not initialized (print)" )
+
+            ! Write trajectory snapshot to VTF output file
+            CALL VTFFile_WriteTimeStep( TrajectoryVTF, X, (/ 10., 10., 10., 90., 90., 90. /) )
+
+            ! Write energy values to the total energy file
+            WRITE(TrajTotEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),           &
+                         KinEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
+                         PotEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
+                         TotEnergy*EnergyConversion(InternalUnits, InputUnits),                    &
+                         2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits)
+
+            IF ( NBeads > 1 ) THEN
+               ! Write energy values to the total energy file
+               WRITE(TrajRingPolymerEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),  &
+                           RPKinEnergy*EnergyConversion(InternalUnits, InputUnits),                  &
+                           PotEnergy*NBeads*EnergyConversion(InternalUnits, InputUnits),             &
+                           RPTotEnergy*EnergyConversion(InternalUnits, InputUnits),                  &
+                           2.0*RPKinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits)
+            END IF
+
+!******************************************************************************************************
+         CASE(CLOSE_OUTPUT)
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( .NOT. WritingCurrentTrajectory, &
+                     " OutputModule.SingleTrajectoryOutput: output for current trajectory not initialized (close)" )
+
+            ! Close trajectory VTF file
+            CALL VTFFile_Dispose( TrajectoryVTF )
+
+            ! Close total energy file
+            CLOSE( UNIT=TrajTotEnergyUnit )
+            IF ( NBeads > 1 )  CLOSE( UNIT=TrajRingPolymerEnergyUnit )
+
+            ! Now update status variable
+            WritingCurrentTrajectory = .FALSE.
+
+!******************************************************************************************************
+         CASE(DIVIDE_EQ_DYN)
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( .NOT. WritingCurrentTrajectory, &
+                     " OutputModule.SingleTrajectoryOutput: output for current trajectory not initialized (divide)" )
+
+            WRITE(TrajTotEnergyUnit, "(/,A)") "# Microcanonical dynamics "
+            IF ( NBeads > 1 )  WRITE(TrajRingPolymerEnergyUnit, "(/,A)") "# Microcanonical dynamics " 
+
+         CASE DEFAULT
+            CALL AbortWithError( " OutputModule.SingleTrajectoryOutput: given action is not defined ")
+      END SELECT
+
+      ! Format for output printing
       800 FORMAT( 1F12.5,4(1F15.8,1X) )
 
-   END SUBROUTINE PrintOutput
+   END SUBROUTINE SingleTrajectoryOutput
 
 !============================================================================================
 
-   SUBROUTINE DisposeOutput(  )
+   SUBROUTINE AverageOutput( Action )
       IMPLICIT NONE
+      INTEGER, INTENT(IN)  ::  Action
 
-      ! exit if module is not setup
-      IF ( .NOT. OutputModuleIsSetup ) RETURN
+      SELECT CASE( Action )
 
-      CALL VTFFile_Dispose( TrajectoryVTF )
-
-      CLOSE( UNIT=TrajTotEnergyUnit )
+         CASE(SETUP_OUTPUT)
 
 
-      OutputModuleIsSetup = .FALSE.
-      
-   END SUBROUTINE DisposeOutput
+         CASE(PRINT_OUTPUT)
+
+         CASE(CLOSE_OUTPUT)
+
+         CASE(DIVIDE_EQ_DYN)
+
+         CASE DEFAULT
+            CALL AbortWithError( " OutputModule.SingleTrajectoryOutput: given action is not defined ")
+      END SELECT
+
+   END SUBROUTINE AverageOutput
 
 !============================================================================================
 

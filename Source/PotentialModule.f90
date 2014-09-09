@@ -201,7 +201,7 @@ MODULE PotentialModule
                      Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
                      MinDistance = MIN( MinDistance, Distance )
                   END DO
-                  IF  ( MinDistance > 2.5 ) EXIT
+                  IF  ( MinDistance > 5.0 ) EXIT
                   X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * BoxSize
                   X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * BoxSize
                   X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * BoxSize
@@ -288,10 +288,11 @@ MODULE PotentialModule
    SUBROUTINE SetNearTranslations( )
       IMPLICIT NONE
       INTEGER :: i, j, k
-      REAL, DIMENSION(3,125) :: TmpNearTranslations
+      REAL, DIMENSION(3,216) :: TmpNearTranslations
       REAL, DIMENSION(3) :: Vector
       REAL :: Distance
 
+      NearPeriodicImages = 0
       IF ( PBC ) THEN
          ! Define how many neighbour cells are checked in the pair potential summation
          DO i = -5, +5
@@ -299,15 +300,22 @@ MODULE PotentialModule
                DO k = -5, +5
                   Vector = FractionalToCartesian( (/ REAL(i), REAL(j), REAL(k) /) )
                   Distance = SQRT( TheOneWithVectorDotVector( Vector, Vector ) )
-                  IF (Distance < CutOff) THEN
+                  IF ( Distance < CutOff .OR. ( abs(i) <= 1 .AND. abs(j) <= 1 .AND. abs(k) <= 1 )) THEN
                      NearPeriodicImages = NearPeriodicImages + 1
                      TmpNearTranslations(:,NearPeriodicImages) =  Vector
                   END IF
                END DO
             END DO
          END DO
+!          PRINT*, " Number of cells included in the summation: ", NearPeriodicImages
          ALLOCATE( NearTranslations(3,NearPeriodicImages) )
          NearTranslations(:,:) =  TmpNearTranslations(:,1:NearPeriodicImages )
+
+!          PRINT*, " "
+!          DO i = 1, NearPeriodicImages
+!             PRINT*, " Translation # ", i, "  Vector: ", NearTranslations(:,i)
+!          END DO
+
       ELSE 
          NearPeriodicImages = 1
          ALLOCATE( NearTranslations(3,NearPeriodicImages) )

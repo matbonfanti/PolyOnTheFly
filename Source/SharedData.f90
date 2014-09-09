@@ -82,6 +82,12 @@ MODULE SharedData
    INTEGER :: NDim                                       !< Nr of dimension of the system
    REAL, DIMENSION(:), ALLOCATABLE :: MassVector         !< Vector with the masses of the system
 
+!=============================================================================================================
+
+   ! INFORMATION ON CURRENT TRAJECTORY STEP
+
+   INTEGER :: iTraj                                      !< Number of current trajectory
+   REAL    :: Time                                       !< Time of the current trajectory step
    
 !=============================================================================================================
 
@@ -99,6 +105,8 @@ MODULE SharedData
    REAL ::  KinEnergy                              !< Total kinetic energy (in AIMD computed from the virial average)
    REAL, DIMENSION(:), ALLOCATABLE :: KinPerCoord  !< Kinetic energy per coordinate ( still virial )
    REAL ::  TotEnergy                              !< Total energy
+   REAL ::  RPKinEnergy                            !< Kinetic energy of the ring polymer
+   REAL ::  RPTotEnergy                            !< Total mechanical energy of the ring polymer
 
    REAL, DIMENSION(:), ALLOCATABLE :: CentroidPos  !< Position of the centroid of the RP
    REAL, DIMENSION(:), ALLOCATABLE :: CentroidVel  !< Velocity of the centroid of the RP
