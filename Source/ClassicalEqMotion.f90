@@ -43,7 +43,8 @@ MODULE ClassicalEqMotion
       PUBLIC :: Evolution
       PUBLIC :: EvolutionSetup, SetupThermostat, SetupRingPolymer
       PUBLIC :: DisposeEvolutionData, DisposeThermostat, DisposeRingPolymer
-      PUBLIC :: EOM_KineticEnergy, EOM_LangevinSecondOrder, EOM_RPMSymplectic, EOM_VelocityVerlet
+      PUBLIC :: EOM_KineticEnergy, EOM_InterBeadsPotential
+      PUBLIC :: EOM_LangevinSecondOrder, EOM_RPMSymplectic, EOM_VelocityVerlet
 
       REAL, PARAMETER :: Over2Sqrt3 = 1.0 / ( 2.0 * SQRT(3.0) )
 
@@ -801,6 +802,31 @@ MODULE ClassicalEqMotion
 
    END FUNCTION EOM_KineticEnergy
 
+!*******************************************************************************
+!> Compute interbeads potential for a ring polymer in a given set of positions.
+!>
+!> @param EvolData     Evolution data type (including a ring polymer)
+!> @param Positions    Array containing the positions at given time step
+!*******************************************************************************
+   REAL FUNCTION EOM_InterBeadsPotential( EvolData, Positions ) RESULT( PotEnergy )
+      IMPLICIT NONE
+      TYPE( Evolution ), INTENT(INOUT)    :: EvolData
+      REAL, DIMENSION(:), INTENT(INOUT)   :: Positions
+      INTEGER :: iDoF, iBead
+ 
+      CALL ERROR( .NOT. EvolData%HasRingPolymer, " EOM_InterBeadsPotential: ring polymer has not been setup ") 
+ 
+      PotEnergy = 0.0
+      DO iDoF = 1, EvolData%NDoF
+         PotEnergy = PotEnergy + 0.5 * EvolData%Mass(iDoF) * EvolData%RPFreq**2 * &
+               ( Positions( iDoF ) - Positions( EvolData%NDoF*(EvolData%NBeads-1) + iDoF ))**2
+         DO iBead = 2, EvolData%NBeads
+            PotEnergy = PotEnergy + 0.5 * EvolData%Mass(iDoF) * EvolData%RPFreq**2 * &
+                  ( Positions( EvolData%NDoF*(iBead-1) + iDoF ) - Positions( EvolData%NDoF*(iBead-2) + iDoF ))**2
+         END DO
+      END DO
+
+   END FUNCTION EOM_InterBeadsPotential
 
 !================================================================================================================================
 !                              END OF MODULE

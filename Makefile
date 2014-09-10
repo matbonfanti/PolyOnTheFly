@@ -16,7 +16,7 @@ LOGNAME = potf.log
 FC = gfortran
 
 # Debugging options ( yes or no )
-DEBUG = no 
+DEBUG = yes 
 
 # Optimization level
 OPTLEVEL = 3

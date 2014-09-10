@@ -88,7 +88,8 @@ MODULE SharedData
 
    INTEGER :: iTraj                                      !< Number of current trajectory
    REAL    :: Time                                       !< Time of the current trajectory step
-   
+   INTEGER :: kStep                                      !< Printing steps counter
+
 !=============================================================================================================
 
    ! POSITION, VELOCITY, ACCELERATION 
@@ -106,6 +107,7 @@ MODULE SharedData
    REAL, DIMENSION(:), ALLOCATABLE :: KinPerCoord  !< Kinetic energy per coordinate ( still virial )
    REAL ::  TotEnergy                              !< Total energy
    REAL ::  RPKinEnergy                            !< Kinetic energy of the ring polymer
+   REAL ::  RPPotEnergy                            !< Potential energy of the ring polymer
    REAL ::  RPTotEnergy                            !< Total mechanical energy of the ring polymer
 
    REAL, DIMENSION(:), ALLOCATABLE :: CentroidPos  !< Position of the centroid of the RP

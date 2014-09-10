@@ -37,10 +37,11 @@ MODULE OutputModule
 
    PRIVATE
 
-   PUBLIC :: SingleTrajectoryOutput
+   PUBLIC :: SingleTrajectoryOutput, DynAveragesOutput
 
-   !> \name ACTIONS
-   !> Integers number identifying the kind of action to be performed by the subroutines
+   !> \name SINGLE TRAJECTORY OUTPUT ACTIONS
+   !> Integers number identifying the kind of action to be performed by
+   !> the SingleTrajectoryOutput subroutine
    !> @{
    INTEGER, PARAMETER, PUBLIC  ::  SETUP_OUTPUT  = 1
    INTEGER, PARAMETER, PUBLIC  ::  PRINT_OUTPUT  = 2
@@ -48,18 +49,67 @@ MODULE OutputModule
    INTEGER, PARAMETER, PUBLIC  ::  DIVIDE_EQ_DYN = 4
    !> @}
 
+   !> \name AVERAGES OUTPUT ACTIONS
+   !> Integers number identifying the kind of action to be performed by
+   !> the EquilAveragesOutput and DynAveragesOutput subroutine
+   !> @{
+   INTEGER, PARAMETER, PUBLIC  ::  SETUP_AVERAGES             = 11
+   INTEGER, PARAMETER, PUBLIC  ::  UPDATE_AVERAGES            = 12
+   INTEGER, PARAMETER, PUBLIC  ::  FINALIZE_AVERAGES          = 13
+   INTEGER, PARAMETER, PUBLIC  ::  PRINT_AVERAGES_AND_DISPOSE = 14
+   !> @}
+
+   !> \name STATUS VARIABLE OF THE AVERAGES OUTPUT
+   !> Integers identifying the status of the averages output
+   !> @{
+   INTEGER, PARAMETER  ::  IS_NOT_SET_UP = 0
+   INTEGER, PARAMETER  ::  IS_SET_UP     = 1
+   INTEGER, PARAMETER  ::  HAS_DATA      = 2
+   INTEGER, PARAMETER  ::  IS_FINALIZED  = 3
+   !> @}
+
    !> Setup variable for the output of the current single trajectory values
    LOGICAL, SAVE :: WritingCurrentTrajectory = .FALSE.
 
-   ! OUTPUT UNITS
+   !> Setup variable for the output of equilibration averages
+   INTEGER, SAVE :: EquilibrationAveragesStatus = 0
+
+   !> Setup variable for the output of dynamics averages
+   INTEGER, SAVE :: DynamicsAveragesStatus = 0
+
+   ! OUTPUT UNITS for single trajectory output
    INTEGER :: TrajTotEnergyUnit
    INTEGER :: TrajRingPolymerEnergyUnit
    INTEGER :: TrajCentroidXUnit
    INTEGER :: TrajCentroidVUnit
-   INTEGER :: TrajCoordEnergyUnit
+
+   ! OUTPUT UNITS for equilibration averages output
+   INTEGER :: EquilTotEnergyUnit
+   INTEGER :: EquilRingPolymerEnergyUnit
+   INTEGER :: EquilCentroidXUnit
+   INTEGER :: EquilCentroidVUnit
+
+   ! OUTPUT UNITS for equilibration averages output
+   INTEGER :: DynTotEnergyUnit
+   INTEGER :: DynRingPolymerEnergyUnit
+   INTEGER :: DynCentroidXUnit
+   INTEGER :: DynCentroidVUnit
+
+   !> Number of print steps of the thermalization
+   INTEGER :: NrEquilPrintSteps
+   !> Number of print steps of the dynamics
+   INTEGER :: NrDynPrintSteps
 
    !> Object to write VTF trajectory file
    TYPE( VTFFile ), SAVE :: TrajectoryVTF
+
+   !> Memory to store equilibration averages
+   REAL, DIMENSION(:), ALLOCATABLE :: EquilKinEnergy, EquilPotEnergy
+   REAL, DIMENSION(:), ALLOCATABLE :: EquilRPKinEnergy, EquilRPPotEnergy
+
+   !> Memory to store dynamics averages
+   REAL, DIMENSION(:), ALLOCATABLE :: DynKinEnergy, DynPotEnergy
+   REAL, DIMENSION(:), ALLOCATABLE :: DynRPKinEnergy, DynRPPotEnergy
 
    ! Data formats
    !> time vs averages, decimal format
@@ -150,9 +200,9 @@ MODULE OutputModule
                ! Write energy values to the total energy file
                WRITE(TrajRingPolymerEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),  &
                            RPKinEnergy*EnergyConversion(InternalUnits, InputUnits),                  &
-                           PotEnergy*NBeads*EnergyConversion(InternalUnits, InputUnits),             &
+                           RPPotEnergy*EnergyConversion(InternalUnits, InputUnits),                  &
                            RPTotEnergy*EnergyConversion(InternalUnits, InputUnits),                  &
-                           2.0*RPKinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits)
+                           2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits)
             END IF
 
 !******************************************************************************************************
@@ -195,26 +245,142 @@ MODULE OutputModule
 
 !============================================================================================
 
-   SUBROUTINE AverageOutput( Action )
+   SUBROUTINE DynAveragesOutput( Action )
       IMPLICIT NONE
       INTEGER, INTENT(IN)  ::  Action
+      INTEGER :: i
+      REAL    :: Time
 
       SELECT CASE( Action )
 
-         CASE(SETUP_OUTPUT)
+!******************************************************************************************************
+         CASE( SETUP_AVERAGES )
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( DynamicsAveragesStatus /= IS_NOT_SET_UP, &
+                     " OutputModule.DynAveragesOutput: already writing output for dynamical averages" )
+
+   NrEquilPrintSteps = EquilNrSteps / EquilPrintStepInterval + 1
+            NrDynPrintSteps   = NrSteps / PrintStepInterval + 1
+
+            ! Allocate memory
+            ALLOCATE( DynKinEnergy(NrDynPrintSteps), DynPotEnergy(NrDynPrintSteps))
+            IF (NBeads > 1) ALLOCATE( DynRPKinEnergy(NrDynPrintSteps), DynRPPotEnergy(NrDynPrintSteps)) 
+
+            ! Initialize arrays
+            DynKinEnergy(:) = 0.0
+            DynPotEnergy(:) = 0.0
+            IF ( NBeads > 1 ) THEN
+               DynRPKinEnergy(:) = 0.0
+               DynRPPotEnergy(:) = 0.0
+            END IF
+
+            ! Now update status variable
+            DynamicsAveragesStatus = IS_SET_UP
+
+!******************************************************************************************************
+         CASE( UPDATE_AVERAGES )
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( DynamicsAveragesStatus /= IS_SET_UP .AND. DynamicsAveragesStatus /= HAS_DATA, &
+                     " OutputModule.DynAveragesOutput: output for dynamical averages not initialized" )
+
+            ! Energy averages
+            DynKinEnergy(kStep) = DynKinEnergy(kStep) + KinEnergy
+            DynPotEnergy(kStep) = DynPotEnergy(kStep) + PotEnergy
+            IF ( NBeads > 1 ) THEN
+               DynRPKinEnergy(kStep) = DynRPKinEnergy(kStep) + RPKinEnergy
+               DynRPPotEnergy(kStep) = DynRPPotEnergy(kStep) + RPPotEnergy
+            END IF
+
+            ! Now update status variable
+            DynamicsAveragesStatus = HAS_DATA
 
 
-         CASE(PRINT_OUTPUT)
+!******************************************************************************************************
+         CASE( FINALIZE_AVERAGES )
+!******************************************************************************************************
 
-         CASE(CLOSE_OUTPUT)
+            ! Check if current trajectory output has correct status
+            CALL ERROR( DynamicsAveragesStatus /= HAS_DATA, &
+                     " OutputModule.DynAveragesOutput: no data to print" )
 
-         CASE(DIVIDE_EQ_DYN)
+            ! Normalize by number of trajectories
+            DynKinEnergy(:) = DynKinEnergy(:) / NrTrajs
+            DynPotEnergy(:) = DynPotEnergy(:) / NrTrajs
+            IF ( NBeads > 1 ) THEN
+               DynRPKinEnergy(:) = DynRPKinEnergy(:) / NrTrajs
+               DynRPPotEnergy(:) = DynRPPotEnergy(:) / NrTrajs
+            END IF            
+
+            ! Now update status variable
+            DynamicsAveragesStatus = IS_FINALIZED
+
+
+!******************************************************************************************************
+         CASE( PRINT_AVERAGES_AND_DISPOSE )
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( DynamicsAveragesStatus /= IS_FINALIZED, &
+                     " OutputModule.DynAveragesOutput: data has not been finalized" )
+
+            ! Open unit to write average energy
+            DynTotEnergyUnit = LookForFreeUnit()
+            OPEN( FILE="Dyn_TotEnergy.dat", UNIT=DynTotEnergyUnit )
+            WRITE(DynTotEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
+                  // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", iTraj
+
+            IF ( NBeads > 1 ) THEN
+               ! Open unit to write ring polymer average energy
+               DynRingPolymerEnergyUnit = LookForFreeUnit()
+               OPEN( FILE="Dyn_RPEnergy.dat", UNIT=DynRingPolymerEnergyUnit )
+               WRITE(DynRingPolymerEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
+                     // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", iTraj
+            END IF
+
+            DO i = 1, NrDynPrintSteps
+               
+               Time = REAL((i-1)*PrintStepInterval)*TimeStep
+
+               ! Write energy values to the total energy file
+               WRITE(DynTotEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),                        &
+                           DynKinEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                         &
+                           DynPotEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                         &
+                           (DynKinEnergy(i)+DynPotEnergy(i))*EnergyConversion(InternalUnits, InputUnits),     &
+                           2.0*DynKinEnergy(i)/NDim*TemperatureConversion(InternalUnits, InputUnits)
+
+               IF ( NBeads > 1 ) THEN
+                  ! Write energy values to the ring polymer energy file
+                  WRITE(DynRingPolymerEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),                 &
+                              DynRPKinEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                        &
+                              DynRPPotEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                        &
+                              (DynRPKinEnergy(i)+DynRPPotEnergy(i))*EnergyConversion(InternalUnits, InputUnits),  &
+                              2.0*DynRPKinEnergy(i)/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits)
+               END IF
+            END DO
+
+            ! Close files
+            CLOSE( DynTotEnergyUnit )
+            CLOSE( DynRingPolymerEnergyUnit )
+
+            ! Deallocate memory
+            DEALLOCATE( DynKinEnergy, DynPotEnergy )
+            IF (NBeads > 1) DEALLOCATE( DynRPKinEnergy, DynRPPotEnergy ) 
+
+            ! Now update status variable
+            DynamicsAveragesStatus = IS_NOT_SET_UP
 
          CASE DEFAULT
-            CALL AbortWithError( " OutputModule.SingleTrajectoryOutput: given action is not defined ")
+            CALL AbortWithError( " OutputModule.DynAveragesOutput: given action is not defined ")
       END SELECT
 
-   END SUBROUTINE AverageOutput
+      ! Format for output printing
+      800 FORMAT( 1F12.5,4(1F15.8,1X) )
+
+   END SUBROUTINE DynAveragesOutput
 
 !============================================================================================
 

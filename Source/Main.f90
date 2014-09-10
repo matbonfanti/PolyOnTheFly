@@ -291,9 +291,9 @@ PROGRAM PolyOnTheFly
 
       ! Compute relevant step numbers
       NrSteps = CEILING( DynamicsTotalTime / TimeStep )
-      EquilNrSteps = NINT(  EquilTotalTime / EquilTimeStep )
+      EquilNrSteps = CEILING(  EquilTotalTime / EquilTimeStep )
       ! Set the step interval between each printing step
-      PrintStepInterval = CEILING( PrintTimeStep / TimeStep )
+      PrintStepInterval = NINT( PrintTimeStep / TimeStep )
       EquilPrintStepInterval = NINT( PrintTimeStep / EquilTimeStep )
       
       ! Frequency and force constant of the harmonic force between the beads
@@ -345,6 +345,9 @@ PROGRAM PolyOnTheFly
       ! Allocate memory for istantaneous averages
       ALLOCATE( KinPerCoord(NDim), CentroidPos(NDim), CentroidVel(NDim) )
 
+      ! Setup output of averages over the set of trajectories
+      CALL DynAveragesOutput( SETUP_AVERAGES )
+
    END SUBROUTINE Setup
       
    ! ===================================================================================================
@@ -373,7 +376,7 @@ PROGRAM PolyOnTheFly
 
    SUBROUTINE Thermalization( )
       IMPLICIT NONE
-      INTEGER :: iStep, kStep
+      INTEGER :: iStep
       REAL    :: KinTimeAverage, KinTimeStDev
 
 
@@ -394,18 +397,27 @@ PROGRAM PolyOnTheFly
 
       kStep = 0
       ! Cycle over the equilibration steps
-      DO iStep = 1, EquilNrSteps
+      DO iStep = 0, EquilNrSteps
 
-         ! Bring the atomic coordinates to the first unit cell
-         CALL PBC_BringToFirstCell( X, NBeads )
+         IF ( iStep > 0 ) THEN
+            ! Propagate for one timestep with Velocity-Verlet
+            IF ( NBeads > 1 ) THEN
+               CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+            ELSE
+               CALL EOM_LangevinSecondOrder( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
+            END IF
 
-         IF ( MOD(iStep-1, EquilPrintStepInterval) == 0.0 .OR. iStep == EquilNrSteps ) THEN
+            ! Bring the atomic coordinates to the first unit cell
+            CALL PBC_BringToFirstCell( X, NBeads )
+         ENDIF
+
+         IF ( MOD(iStep, EquilPrintStepInterval) == 0.0 ) THEN
 
             ! New print step of the equilibration
             kStep = kStep + 1
 
             ! Update time value
-            Time = (iStep-1)*EquilTimeStep
+            Time = REAL(iStep)*EquilTimeStep
 
             ! Compute average energies
             CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
@@ -413,7 +425,8 @@ PROGRAM PolyOnTheFly
             IF ( NBeads > 1 ) THEN
                ! compute mechanical energy of the ring polymer
                RPKinEnergy = EOM_KineticEnergy( InitialConditions, V )
-               RPTotEnergy = RPKinEnergy + NBeads * PotEnergy
+               RPPotEnergy = EOM_InterBeadsPotential( InitialConditions, X ) + NBeads * PotEnergy
+               RPTotEnergy = RPKinEnergy + RPPotEnergy
             END IF
             ! Compute coordinate and velocity centroid
             CentroidPos = CentroidCoord( X )
@@ -432,16 +445,16 @@ PROGRAM PolyOnTheFly
 
          END IF
       
-         ! Propagate for one timestep with Velocity-Verlet
-         IF ( NBeads > 1 ) THEN
-            CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
-         ELSE
-            CALL EOM_LangevinSecondOrder( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr )
-         END IF
-
       END DO
       
       PRINT "(A)", " Thermalization completed! "
+
+      KinTimeAverage = KinTimeAverage / kStep
+      KinTimeStDev = SQRT( KinTimeStDev / kStep - KinTimeAverage**2 )
+
+      PRINT 600, KinTimeAverage*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                 KinTimeStDev*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                 2.0*KinTimeAverage/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
 
       ! Write to the output file a separation between equilibration and dynamics
       CALL SingleTrajectoryOutput( DIVIDE_EQ_DYN )
@@ -458,13 +471,13 @@ PROGRAM PolyOnTheFly
 
    SUBROUTINE DynamicsRun( )
       IMPLICIT NONE
-      INTEGER :: iStep, kStep
+      INTEGER :: iStep
 
       PRINT "(/,A)", " Propagating system in the microcanonical ensamble... " 
 
       ! Bring the atomic coordinates to the first unit cell
       CALL PBC_BringToFirstCell( X, NBeads )
-
+ 
       ! Compute starting potential and forces
       IF ( NBeads > 1 ) THEN
          CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
@@ -472,20 +485,53 @@ PROGRAM PolyOnTheFly
          PotEnergy = GetPotential( X, A )
       END IF
 
-      ! cycle over nstep velocity verlet iterations
-      DO iStep = 1,NrSteps
+      ! Compute average energies
+      CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
+      TotEnergy = PotEnergy + KinEnergy
+      IF ( NBeads > 1 ) THEN
+         ! compute mechanical energy of the ring polymer
+         RPKinEnergy = EOM_KineticEnergy( MolecularDynamics, V )
+         RPPotEnergy = EOM_InterBeadsPotential( MolecularDynamics, X ) + NBeads * PotEnergy
+         RPTotEnergy = RPKinEnergy + RPPotEnergy
+      END IF
 
-         ! Bring the atomic coordinates to the first unit cell
-         CALL PBC_BringToFirstCell( X, NBeads )
+      IF ( NBeads > 1 ) THEN
+         PRINT 601, RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                    RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                    RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                    2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+      ELSE
+         PRINT 601, KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                    PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                    TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                    2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+      END IF
+
+      kStep = 0
+
+      ! cycle over nstep velocity verlet iterations
+      DO iStep = 0,NrSteps
+
+         IF ( iStep > 0 ) THEN 
+            ! Propagate for one timestep with Velocity-Verlet
+            IF ( NBeads > 1 ) THEN
+               CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
+            ELSE
+               CALL EOM_LangevinSecondOrder( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
+            END IF
+
+            ! Bring the atomic coordinates to the first unit cell
+            CALL PBC_BringToFirstCell( X, NBeads )
+         END IF
 
          ! output to write every nprint steps 
-         IF ( mod(iStep-1,PrintStepInterval) == 0 .OR. iStep == NrSteps ) THEN
+         IF ( mod(iStep,PrintStepInterval) == 0 ) THEN
 
             ! increment counter for printing steps
             kStep = kStep+1
 
             ! Update time value
-            Time = (iStep-1)*TimeStep
+            Time = REAL(iStep)*TimeStep
 
             ! Compute average energies
             CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
@@ -493,8 +539,10 @@ PROGRAM PolyOnTheFly
             IF ( NBeads > 1 ) THEN
                ! compute mechanical energy of the ring polymer
                RPKinEnergy = EOM_KineticEnergy( MolecularDynamics, V )
-               RPTotEnergy = RPKinEnergy + NBeads * PotEnergy
+               RPPotEnergy = EOM_InterBeadsPotential( MolecularDynamics, X ) + NBeads * PotEnergy
+               RPTotEnergy = RPKinEnergy + RPPotEnergy
             END IF
+
             ! Compute coordinate and velocity centroid
             CentroidPos = CentroidCoord( X )
             CentroidVel = CentroidCoord( V )               
@@ -502,18 +550,26 @@ PROGRAM PolyOnTheFly
             ! Print istantaneous values of the trajectory
             CALL SingleTrajectoryOutput( PRINT_OUTPUT )
 
-         END IF 
+            ! Update averages over the set of trajectories
+            CALL DynAveragesOutput( UPDATE_AVERAGES )
 
-         ! Propagate for one timestep with Velocity-Verlet
-         IF ( NBeads > 1 ) THEN
-            CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
-         ELSE
-            CALL EOM_LangevinSecondOrder( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr )
-         END IF
+         END IF 
 
       END DO
 
       PRINT "(A)", " Time propagation completed! "
+
+      IF ( NBeads > 1 ) THEN
+         PRINT 602, RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                    RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                    RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                    2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+      ELSE
+         PRINT 602, KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                    PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                    TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                    2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+      END IF
 
       ! Close output file
       CALL SingleTrajectoryOutput( CLOSE_OUTPUT )
@@ -538,6 +594,12 @@ PROGRAM PolyOnTheFly
 
    SUBROUTINE Averages( )
       IMPLICIT NONE
+
+      ! normalize averages
+      CALL DynAveragesOutput( FINALIZE_AVERAGES )
+      ! Print averages to outptu files
+      CALL DynAveragesOutput( PRINT_AVERAGES_AND_DISPOSE )
+
 
    END SUBROUTINE Averages
 
