@@ -37,7 +37,7 @@ MODULE OutputModule
 
    PRIVATE
 
-   PUBLIC :: SingleTrajectoryOutput, DynAveragesOutput
+   PUBLIC :: SingleTrajectoryOutput, DynAveragesOutput, EquilAveragesOutput
 
    !> \name SINGLE TRAJECTORY OUTPUT ACTIONS
    !> Integers number identifying the kind of action to be performed by
@@ -261,7 +261,6 @@ MODULE OutputModule
             CALL ERROR( DynamicsAveragesStatus /= IS_NOT_SET_UP, &
                      " OutputModule.DynAveragesOutput: already writing output for dynamical averages" )
 
-   NrEquilPrintSteps = EquilNrSteps / EquilPrintStepInterval + 1
             NrDynPrintSteps   = NrSteps / PrintStepInterval + 1
 
             ! Allocate memory
@@ -381,6 +380,144 @@ MODULE OutputModule
       800 FORMAT( 1F12.5,4(1F15.8,1X) )
 
    END SUBROUTINE DynAveragesOutput
+
+!============================================================================================
+
+   SUBROUTINE EquilAveragesOutput( Action )
+      IMPLICIT NONE
+      INTEGER, INTENT(IN)  ::  Action
+      INTEGER :: i
+      REAL    :: Time
+
+      SELECT CASE( Action )
+
+!******************************************************************************************************
+         CASE( SETUP_AVERAGES )
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( EquilibrationAveragesStatus /= IS_NOT_SET_UP, &
+                     " OutputModule.EquilAveragesOutput: already writing output for dynamical averages" )
+
+            NrEquilPrintSteps = EquilNrSteps / EquilPrintStepInterval + 1
+
+            ! Allocate memory
+            ALLOCATE( EquilKinEnergy(NrEquilPrintSteps), EquilPotEnergy(NrEquilPrintSteps))
+            IF (NBeads > 1) ALLOCATE( EquilRPKinEnergy(NrEquilPrintSteps), EquilRPPotEnergy(NrEquilPrintSteps)) 
+
+            ! Initialize arrays
+            EquilKinEnergy(:) = 0.0
+            EquilPotEnergy(:) = 0.0
+            IF ( NBeads > 1 ) THEN
+               EquilRPKinEnergy(:) = 0.0
+               EquilRPPotEnergy(:) = 0.0
+            END IF
+
+            ! Now update status variable
+            EquilibrationAveragesStatus = IS_SET_UP
+
+!******************************************************************************************************
+         CASE( UPDATE_AVERAGES )
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( EquilibrationAveragesStatus /= IS_SET_UP .AND. EquilibrationAveragesStatus /= HAS_DATA, &
+                     " OutputModule.EquilAveragesOutput: output for dynamical averages not initialized" )
+
+            ! Energy averages
+            EquilKinEnergy(kStep) = EquilKinEnergy(kStep) + KinEnergy
+            EquilPotEnergy(kStep) = EquilPotEnergy(kStep) + PotEnergy
+            IF ( NBeads > 1 ) THEN
+               EquilRPKinEnergy(kStep) = EquilRPKinEnergy(kStep) + RPKinEnergy
+               EquilRPPotEnergy(kStep) = EquilRPPotEnergy(kStep) + RPPotEnergy
+            END IF
+
+            ! Now update status variable
+            EquilibrationAveragesStatus = HAS_DATA
+
+
+!******************************************************************************************************
+         CASE( FINALIZE_AVERAGES )
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( EquilibrationAveragesStatus /= HAS_DATA, &
+                     " OutputModule.EquilAveragesOutput: no data to print" )
+
+            ! Normalize by number of trajectories
+            EquilKinEnergy(:) = EquilKinEnergy(:) / NrTrajs
+            EquilPotEnergy(:) = EquilPotEnergy(:) / NrTrajs
+            IF ( NBeads > 1 ) THEN
+               EquilRPKinEnergy(:) = EquilRPKinEnergy(:) / NrTrajs
+               EquilRPPotEnergy(:) = EquilRPPotEnergy(:) / NrTrajs
+            END IF            
+
+            ! Now update status variable
+            EquilibrationAveragesStatus = IS_FINALIZED
+
+
+!******************************************************************************************************
+         CASE( PRINT_AVERAGES_AND_DISPOSE )
+!******************************************************************************************************
+
+            ! Check if current trajectory output has correct status
+            CALL ERROR( EquilibrationAveragesStatus /= IS_FINALIZED, &
+                     " OutputModule.EquilAveragesOutput: data has not been finalized" )
+
+            ! Open unit to write average energy
+            EquilTotEnergyUnit = LookForFreeUnit()
+            OPEN( FILE="Equil_TotEnergy.dat", UNIT=EquilTotEnergyUnit )
+            WRITE(EquilTotEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
+                  // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", iTraj
+
+            IF ( NBeads > 1 ) THEN
+               ! Open unit to write ring polymer average energy
+               EquilRingPolymerEnergyUnit = LookForFreeUnit()
+               OPEN( FILE="Equil_RPEnergy.dat", UNIT=EquilRingPolymerEnergyUnit )
+               WRITE(EquilRingPolymerEnergyUnit, "(A,I6,/)") "# E/T vs time (" // trim(TimeUnit(InputUnits)) // " "    &
+                     // trim(TemperUnit(InputUnits)) // " vs " // trim(EnergyUnit(InputUnits)) // ") - trajectory # ", iTraj
+            END IF
+
+            DO i = 1, NrEquilPrintSteps
+               
+               Time = REAL((i-1)*EquilPrintStepInterval)*EquilTimeStep
+
+               ! Write energy values to the total energy file
+               WRITE(EquilTotEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),                        &
+                           EquilKinEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                         &
+                           EquilPotEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                         &
+                           (EquilKinEnergy(i)+EquilPotEnergy(i))*EnergyConversion(InternalUnits, InputUnits),     &
+                           2.0*EquilKinEnergy(i)/NDim*TemperatureConversion(InternalUnits, InputUnits)
+
+               IF ( NBeads > 1 ) THEN
+                  ! Write energy values to the ring polymer energy file
+                  WRITE(EquilRingPolymerEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),                 &
+                              EquilRPKinEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                        &
+                              EquilRPPotEnergy(i)*EnergyConversion(InternalUnits, InputUnits),                        &
+                              (EquilRPKinEnergy(i)+EquilRPPotEnergy(i))*EnergyConversion(InternalUnits, InputUnits),  &
+                              2.0*EquilRPKinEnergy(i)/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits)
+               END IF
+            END DO
+
+            ! Close files
+            CLOSE( EquilTotEnergyUnit )
+            CLOSE( EquilRingPolymerEnergyUnit )
+
+            ! Deallocate memory
+            DEALLOCATE( EquilKinEnergy, EquilPotEnergy )
+            IF (NBeads > 1) DEALLOCATE( EquilRPKinEnergy, EquilRPPotEnergy ) 
+
+            ! Now update status variable
+            EquilibrationAveragesStatus = IS_NOT_SET_UP
+
+         CASE DEFAULT
+            CALL AbortWithError( " OutputModule.EquilAveragesOutput: given action is not defined ")
+      END SELECT
+
+      ! Format for output printing
+      800 FORMAT( 1F12.5,4(1F15.8,1X) )
+
+   END SUBROUTINE EquilAveragesOutput
 
 !============================================================================================
 

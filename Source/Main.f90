@@ -347,6 +347,7 @@ PROGRAM PolyOnTheFly
 
       ! Setup output of averages over the set of trajectories
       CALL DynAveragesOutput( SETUP_AVERAGES )
+      CALL EquilAveragesOutput( SETUP_AVERAGES )
 
    END SUBROUTINE Setup
       
@@ -442,6 +443,9 @@ PROGRAM PolyOnTheFly
 
             ! Print istantaneous values of the trajectory
             CALL SingleTrajectoryOutput( PRINT_OUTPUT )
+
+            ! Update averages over the set of trajectories
+            CALL EquilAveragesOutput( UPDATE_AVERAGES )
 
          END IF
       
@@ -597,8 +601,10 @@ PROGRAM PolyOnTheFly
 
       ! normalize averages
       CALL DynAveragesOutput( FINALIZE_AVERAGES )
+      CALL EquilAveragesOutput( FINALIZE_AVERAGES )
       ! Print averages to outptu files
       CALL DynAveragesOutput( PRINT_AVERAGES_AND_DISPOSE )
+      CALL EquilAveragesOutput( PRINT_AVERAGES_AND_DISPOSE )
 
 
    END SUBROUTINE Averages
