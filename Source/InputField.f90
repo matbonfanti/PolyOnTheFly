@@ -16,12 +16,18 @@
 !***************************************************************************************
 !
 !>  \author           Matteo Bonfanti
-!>  \version          1.0
+!>  \version          2.0
 !>  \date             July 2012
 !>
 !***************************************************************************************
 !
 !>   \remark         The module is based on Mark Somers' inputfiels.f90
+!
+!***************************************************************************************
+!
+!>  \par Updates
+!>  \arg 16 September 2014: implemented support for integer, string and real 
+!>                          array input
 !
 !***************************************************************************************
 MODULE InputField
@@ -45,7 +51,8 @@ MODULE InputField
    !> A wrapper for different reading different kind of input data.
    INTERFACE SetFieldFromInput
       MODULE PROCEDURE SetRealFieldFromInput, &
-               SetIntegerFieldFromInput, SetStringFieldFromInput, SetLogicalFieldFromInput
+               SetIntegerFieldFromInput, SetStringFieldFromInput, SetLogicalFieldFromInput, &
+               SetArrayOfRealFieldFromInput, SetArrayOfStringFieldFromInput, SetArrayOfIntegersFieldFromInput
    END INTERFACE
 
 !********************************************************************************************************
@@ -462,5 +469,278 @@ MODULE InputField
 
    END SUBROUTINE SetLogicalFieldFromInput
 
+
+!*******************************************************************************
+!           SetArrayOfRealFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  array of real variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file 
+!>  @param Variable    Real array variable to store input data
+!>  @param DefaultV    Default real array value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetArrayOfRealFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT)          :: Input
+      CHARACTER(*), INTENT(IN)                  :: FieldName
+      REAL, DIMENSION(:), INTENT(OUT)           :: Variable
+      REAL, DIMENSION(:), INTENT(IN), OPTIONAL  :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetArrayOfRealFieldFromInput: trying to read a closed file input file " )
+
+      ! If present, default value should be of the same dimension as the variable to set
+      IF ( PRESENT( DefaultV ) ) CALL ERROR( SIZE(DefaultV) /= SIZE(Variable), &
+                                       " SetArrayOfRealFieldFromInput: wrong dimension of the default value " )
+
+#if defined(VERBOSE_OUTPUT)
+      WRITE(*,"(/,A,A,A,I3)") " SetArrayOfRealFieldFromInput: Looking for real field ", trim(FieldName), " in unit ", Input%Unit
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO 
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetArrayOfRealFieldFromInput: could not find field "//TRIM(FieldName) )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(VERBOSE_OUTPUT)
+            WRITE(*,*) " Found field ", trim(FieldName)
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//")" 
+            ! read first part of the line with field name
+            READ(  Input%Unit, RdFormat, ADVANCE='NO' ) String
+            ! store the value of the variable
+            READ(  Input%Unit, * ) Variable
+#if defined(VERBOSE_OUTPUT)
+            WRITE(*,*) " Set variable equal to ", Variable
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetArrayOfRealFieldFromInput
+
+
+
+!*******************************************************************************
+!           SetArrayOfStringFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  array of strings variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file 
+!>  @param Variable    String array variable to store input data
+!>  @param DefaultV    Default string array value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetArrayOfStringFieldFromInput( Input, FieldName, Variable, DefaultV)
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT)                  :: Input
+      CHARACTER(*), INTENT(IN)                          :: FieldName
+      CHARACTER(*), DIMENSION(:), INTENT(OUT)           :: Variable
+      CHARACTER(*), DIMENSION(:), INTENT(IN), OPTIONAL  :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetArrayOfStringFieldFromInput: trying to read a closed file input file " )
+
+      ! If present, default value should be of the same dimension as the variable to set
+      IF ( PRESENT( DefaultV ) ) CALL ERROR( SIZE(DefaultV) /= SIZE(Variable), &
+                                       " SetArrayOfStringFieldFromInput: wrong dimension of the default value " )
+
+#if defined(VERBOSE_OUTPUT)
+      WRITE(*,"(/,A,A,A,I3)") " SetArrayOfStringFieldFromInput: Looking for string field ",trim(FieldName), " in unit ",Input%Unit
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO 
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetArrayOfStringFieldFromInput: could not find field "//TRIM(FieldName) )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(VERBOSE_OUTPUT)
+            WRITE(*,*) " Found field ", trim(FieldName)
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//")" 
+            ! read first part of the line with field name
+            READ(  Input%Unit, RdFormat, ADVANCE='NO' ) String
+            ! store the value of the variable
+            READ(  Input%Unit, * ) Variable
+#if defined(VERBOSE_OUTPUT)
+            WRITE(*,*) " Set variable equal to ", Variable
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetArrayOfStringFieldFromInput
+
+
+!*******************************************************************************
+!           SetArrayOfIntegersFieldFromInput
+!*******************************************************************************
+!>  Look for the field name in input file and store the corresponding
+!>  array of real variable. If the optional argument DefaultV is absent, the subroutine
+!>  stops with error in case the Field is not found in the input file. Otherwise,
+!>  the default value DefaultV is assigned to the variable.
+!>
+!>  @param Input       Data type to store the input file related variables
+!>  @param FieldName   Field name to find in the input file 
+!>  @param Variable    Real array variable to store input data
+!>  @param DefaultV    Default real array value to assign to the variable
+!*******************************************************************************
+   SUBROUTINE SetArrayOfIntegersFieldFromInput( Input, FieldName, Variable, DefaultV )
+      IMPLICIT NONE
+      TYPE( InputFile ), INTENT(INOUT)          :: Input
+      CHARACTER(*), INTENT(IN)                  :: FieldName
+      INTEGER, DIMENSION(:), INTENT(OUT)           :: Variable
+      INTEGER, DIMENSION(:), INTENT(IN), OPTIONAL  :: DefaultV
+
+      CHARACTER(len=1024)              :: Line
+      INTEGER                          :: LineLength, ColonPos, ReadingStatus
+      CHARACTER(30)                    :: String, RdFormat
+
+      ! check if file of the datatype is open
+      CALL ERROR( Input%Status == FILE_IS_CLOSED, " SetArrayOfIntegersFieldFromInput: trying to read a closed file input file " )
+
+      ! If present, default value should be of the same dimension as the variable to set
+      IF ( PRESENT( DefaultV ) ) CALL ERROR( SIZE(DefaultV) /= SIZE(Variable), &
+                                       " SetArrayOfIntegersFieldFromInput: wrong dimension of the default value " )
+
+#if defined(VERBOSE_OUTPUT)
+      WRITE(*,"(/,A,A,A,I3)") " SetArrayOfIntegersFieldFromInput: Looking for real field ", trim(FieldName), " in unit ", Input%Unit
+#endif
+
+      ! Rewind input file
+      REWIND( Input%Unit )
+
+      ! cycle over the lines of the input file
+      DO 
+         ! read input file
+         READ( Input%Unit, "(A1024)", IOSTAT=ReadingStatus ) Line
+
+         ! if file is finished without finding the fild, give error or set default value
+         IF ( ReadingStatus /= 0 ) THEN
+            IF ( .NOT. PRESENT(DefaultV ) ) THEN
+               CALL AbortWithError( " SetArrayOfIntegersFieldFromInput: could not find field "//TRIM(FieldName) )
+            ELSE
+               Variable = DefaultV
+               WRITE(String,*) DefaultV
+               CALL ShowWarning( "Variable "//FieldName//" set to default value of "//String ); EXIT
+            END IF
+         END IF
+
+         ! remove leading blanks...
+         Line = ADJUSTL( Line )
+         ! get length of line without the spaces at the end...
+         LineLength = LEN_TRIM( Line )
+
+         ! skip line if empty or starts with #
+         IF ( LineLength == 0 .OR. Line(1:1) == '#' ) CYCLE
+
+         ! Find position of the first colon
+         ColonPos = SCAN( Line, ':' )
+         ! skip line if not present
+         IF ( ColonPos <= 1 ) CYCLE
+
+         ! check if the field name corresponds
+         IF ( TRIM( FieldName ) ==  TRIM( ADJUSTL( Line(1:ColonPos-1) ) )  ) THEN
+#if defined(VERBOSE_OUTPUT)
+            WRITE(*,*) " Found field ", trim(FieldName)
+#endif
+            ! rewind one record
+            BACKSPACE( Input%Unit )
+            ! define reading format
+            WRITE( String, * ) ColonPos
+            RdFormat = "(A"//TRIM( ADJUSTL( String))//")" 
+            ! read first part of the line with field name
+            READ(  Input%Unit, RdFormat, ADVANCE='NO' ) String
+            ! store the value of the variable
+            READ(  Input%Unit, * ) Variable
+#if defined(VERBOSE_OUTPUT)
+            WRITE(*,*) " Set variable equal to ", Variable
+#endif
+            EXIT
+         ENDIF
+      END DO
+
+   END SUBROUTINE SetArrayOfIntegersFieldFromInput
 
 END MODULE InputField

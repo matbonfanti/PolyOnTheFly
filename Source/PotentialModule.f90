@@ -26,6 +26,7 @@ MODULE PotentialModule
    USE InputField
    USE UnitConversion
    USE RandomNumberGenerator
+   USE fsiesta
 
    PRIVATE
 
@@ -36,6 +37,7 @@ MODULE PotentialModule
    !> @{
    INTEGER, PARAMETER  ::  FREE_PARTICLES    = 0
    INTEGER, PARAMETER  ::  LJ_PAIR_POTENTIAL = 1
+   INTEGER, PARAMETER  ::  SIESTA_ONTHEFLY   = 2
    !> @}
 
    !> Setup variable for the potential
@@ -52,6 +54,15 @@ MODULE PotentialModule
 
    !> Size for cubic cells
    REAL, SAVE :: BoxSize
+   !> Vectors of the unit cell
+   REAL, DIMENSION(3,3), SAVE :: UnitVectors
+
+   !> Label of the system for SIESTA
+   CHARACTER(100) :: SystemLabel
+   !> Atomic numbers of the atoms 
+   INTEGER, DIMENSION(:), SAVE, ALLOCATABLE  :: AtomicNumbers
+     !> Positions of the atoms
+   REAL, DIMENSION(:,:), SAVE, ALLOCATABLE :: AtomicPositions
 
    !> Cutoff distance for a pair potential
    REAL, SAVE   :: CutOff = 100.0
@@ -76,9 +87,11 @@ MODULE PotentialModule
       IMPLICIT NONE
       CHARACTER(*), INTENT(IN)   :: PotentialFileName
 
-      CHARACTER(100)    :: ErrorMsg
+      CHARACTER(100)    :: ErrorMsg, String
       TYPE(InputFile)   :: PotentialData
       INTEGER           :: InputLength, InputEnergy, InputMass       ! Units of input data, defined from the input file
+      INTEGER           :: iAtom
+      LOGICAL           :: FileExists
 
       ! exit if module is setup
       IF ( PotentialModuleIsSetup ) RETURN
@@ -142,6 +155,50 @@ MODULE PotentialModule
             ! Check how many image atoms should be included in the pair potential summation
             CALL SetNearTranslations( )
 
+         ! Gas of LJ particles
+         CASE( SIESTA_ONTHEFLY )
+
+            ! SystemLabel
+            WRITE(SystemLabel,"(A,I0.3)") "PolyOnTheFly", 0
+            ! HERE THE NUMBER ZERO SHOULD BE THE SLAVE ID NUMBER!
+
+            ! number of particles
+            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
+            ALLOCATE( AtomicNumbers(AtomNo), AtomicPositions(3,AtomNo) )
+
+            ! periodic system
+            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
+            ! Vectors of the unit cell
+            IF ( PBC ) THEN
+               CALL SetFieldFromInput( PotentialData, "AUnitVector", UnitVectors(:,1) )
+               CALL SetFieldFromInput( PotentialData, "BUnitVector", UnitVectors(:,2) )
+               CALL SetFieldFromInput( PotentialData, "CUnitVector", UnitVectors(:,3) )
+               UnitVectors = UnitVectors * LengthConversion( PotentialUnits, InternalUnits )
+               CALL PBC_Setup( UnitVectors(:,1), UnitVectors(:,2), UnitVectors(:,3) )
+            END IF
+
+            ! Read labels of the atoms 
+            CALL SetFieldFromInput( PotentialData, "AtomicNumbers", AtomicNumbers )
+            ! Read Atomic positions
+            DO iAtom = 1, AtomNo
+               WRITE(String,"(A,I0.3)") "Atom",iAtom
+               CALL SetFieldFromInput( PotentialData, trim(adjustl(String)), AtomicPositions(:,iAtom) )
+            END DO
+            AtomicPositions = AtomicPositions * LengthConversion( PotentialUnits, InternalUnits )
+
+            ! Check if pseudopotentials are present
+            DO iAtom = 1, AtomNo
+               INQUIRE(FILE=TRIM(AtomicLabel(AtomicNumbers(iAtom)))//".psf" , EXIST=FileExists)
+               CALL ERROR( .NOT. FileExists, " SetupPotential: missing pseudopotential "//TRIM(AtomicLabel(iAtom))//".psf" )
+            END DO
+
+            CALL WriteSIESTAInput()
+
+            ! Initialize SIESTA input units
+!             call siesta_units( 'bohr', 'hartree' )
+            ! Initialize siesta processes
+            CALL siesta_launch( TRIM(ADJUSTL(SystemLabel)), 1 )
+
       END SELECT
 
       ! close input file
@@ -158,8 +215,9 @@ MODULE PotentialModule
       IMPLICIT NONE
       INTEGER, INTENT(IN) :: IdNr
 
-      PotentialIdExists =  ( ( IdNr == FREE_PARTICLES ) .OR.  &
-                            ( IdNr == LJ_PAIR_POTENTIAL ) )
+      PotentialIdExists =  ( ( IdNr == FREE_PARTICLES    ) .OR. &
+                             ( IdNr == LJ_PAIR_POTENTIAL ) .OR. &
+                             ( IdNr == SIESTA_ONTHEFLY   )  )
 
    END FUNCTION PotentialIdExists
 
@@ -182,7 +240,6 @@ MODULE PotentialModule
       ! Depending on system number, different initialization operations
       SELECT CASE( SystemNumber )
 
-         ! Setup general parameters
          CASE( FREE_PARTICLES, LJ_PAIR_POTENTIAL )
 
             X( 1 ) = UniformRandomNr( RandomNr ) * BoxSize
@@ -208,6 +265,12 @@ MODULE PotentialModule
                END DO
             END DO
 
+         CASE( SIESTA_ONTHEFLY )
+
+            DO i = 1, AtomNo
+               X( (i-1)*3+1 : (i-1)*3+3 ) = AtomicPositions( :,i )
+            END DO
+
       END SELECT
 
    END SUBROUTINE GetInitialPositions
@@ -229,6 +292,7 @@ MODULE PotentialModule
    FUNCTION GetMasses( )
       IMPLICIT NONE
       REAL, DIMENSION( 3*AtomNo ) :: GetMasses
+      INTEGER :: i
 
       ! Error if module not have been setup yet
       CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetMasses : Module not Setup" )
@@ -238,6 +302,11 @@ MODULE PotentialModule
 
          CASE( FREE_PARTICLES, LJ_PAIR_POTENTIAL )
             GetMasses(:) = 1.0 * MassConversion(PotentialUnits, InternalUnits)
+
+         CASE( SIESTA_ONTHEFLY )
+            DO i = 1, AtomNo
+               GetMasses( (i-1)*3+1 : (i-1)*3+3 ) = AtomicMass( AtomicNumbers(i) )
+            END DO
 
       END SELECT
 
@@ -249,6 +318,8 @@ MODULE PotentialModule
       IMPLICIT NONE
       REAL, DIMENSION(:), TARGET, INTENT(IN)  :: X
       REAL, DIMENSION(:), TARGET, INTENT(OUT) :: Force
+      REAL, DIMENSION(3,AtomNo) :: TmpForces
+      REAL, DIMENSION(3,3)      :: Stress
 
       ! Error if module not have been setup yet
       CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetPotential : Module not Setup" )
@@ -266,6 +337,17 @@ MODULE PotentialModule
 
          CASE( LJ_PAIR_POTENTIAL )
             CALL PairPotential( X(:), GetPotential, Force(:) )
+
+         CASE( SIESTA_ONTHEFLY ) 
+            ! Copy coordianates in x,y,z format
+            AtomicPositions = RESHAPE( X, (/ 3, AtomNo /) )
+            ! compute forces with siesta
+            IF ( PBC ) THEN
+               CALL siesta_forces( SystemLabel, AtomNo, AtomicPositions, UnitVectors, GetPotential, TmpForces, Stress )
+            ELSE
+               CALL siesta_forces( label=SystemLabel, na=AtomNo, xa=AtomicPositions, energy=GetPotential, fa=TmpForces )
+            END IF
+            Force = RESHAPE( TmpForces, (/ 3*AtomNo /) )
 
       END SELECT
 
@@ -398,6 +480,169 @@ MODULE PotentialModule
       V = LJ_WellDepth *( (LJ_EquilDist/Distance)**12 - 2.0*(LJ_EquilDist/Distance)**6 )
       Derivative = - 12.0 * LJ_WellDepth / Distance * ( (LJ_EquilDist/Distance)**12 - (LJ_EquilDist/Distance)**6 )
    END FUNCTION LennardJones
+
+
+   SUBROUTINE WriteSIESTAInput()
+      IMPLICIT NONE
+      INTEGER :: OutputUnit 
+      INTEGER, DIMENSION(AtomNo) :: UniqueKindOfAtoms
+      INTEGER :: KindOfAtomsNr, i, j
+
+      ! Extract the unique kind of atoms from the list of atomic numbers
+      UniqueKindOfAtoms = AtomicNumbers
+      CALL RemoveDups(UniqueKindOfAtoms, KindOfAtomsNr) 
+
+      ! Open output unit
+      OutputUnit = LookForFreeUnit()
+      OPEN( UNIT=OutputUnit, FILE=TRIM(ADJUSTL(SystemLabel))//".fdf" )
+
+      WRITE( OutputUnit, 300 ) "PolyOnTheFly - Ab Initio Forces", TRIM(ADJUSTL(SystemLabel)), AtomNo, KindOfAtomsNr, &
+                               "forces", "100 Ry", "T"
+
+      WRITE( OutputUnit, 300 ) " OccupationFunction         MP      "
+      WRITE( OutputUnit, 300 ) " OccupationMPOrder          5       "
+      WRITE( OutputUnit, 300 ) " ElectronicTemperature      50.0 K  "
+      WRITE( OutputUnit, 300 ) " DM.MixingWeight            0.500   "
+      WRITE( OutputUnit, 300 ) " DM.NumberPulay             5       "
+      WRITE( OutputUnit, 300 ) " DM.Tolerance               1.0d-4  "
+
+      WRITE( OutputUnit, 400 ) 
+      DO i = 1, KindOfAtomsNr
+         WRITE( OutputUnit, 401 ) i,  UniqueKindOfAtoms(i), ADJUSTR(AtomicLabel(UniqueKindOfAtoms(i)))
+      END DO
+      WRITE( OutputUnit, 402 )
+
+      WRITE( OutputUnit, 500 ) "Bohr"
+      DO i = 1, AtomNo
+         DO j = 1, KindOfAtomsNr
+            IF ( UniqueKindOfAtoms(j) == AtomicNumbers(i) ) EXIT
+         END DO
+         WRITE( OutputUnit, 501 ) AtomicPositions(:,i), j
+      END DO
+      WRITE( OutputUnit, 502 ) 
+
+   300 FORMAT( 3X,"SystemName",     T30,A40, /,  &
+               3X,"SystemLabel",    T30,A40, /,  &
+               3X,"NumberOfAtoms",  T30,I40, /,  &
+               3X,"NumberOfSpecies",T30,I40, 2/, &
+               3X,"MD.TypeOfRun",   T30,A40, 2/, &
+               3X,"MeshCutoff",     T30,A40, /,  &
+               3X,"DM.UseSaveDM",   T30,A40, /   )
+
+   400 FORMAT( 3X,"%block ChemicalSpeciesLabel" )
+   401 FORMAT( 3X,I4,I4,A4 )
+   402 FORMAT( 3X,"%endblock ChemicalSpeciesLabel", / )
+
+   500 FORMAT( 3X,"AtomicCoordinatesFormat", T30,A40, /, &
+               3X,"%block AtomicCoordinatesAndAtomicSpecies" )
+   501 FORMAT( 3X, 3F15.6,I10 )
+   502 FORMAT( 3X,"%endblock AtomicCoordinatesAndAtomicSpecies", / )
+
+   END SUBROUTINE WriteSIESTAInput
+
+
+   FUNCTION AtomicLabel( AtomicNumber )
+      IMPLICIT NONE
+      INTEGER, INTENT(IN) :: AtomicNumber
+      CHARACTER(3)        :: AtomicLabel
+      CHARACTER(100)      :: ErrorMsg
+
+      SELECT CASE( AtomicNumber )
+         CASE ( 1 )
+            AtomicLabel = "H"
+         CASE ( 2 )
+            AtomicLabel = "He"
+         CASE ( 3 )
+            AtomicLabel = "Li"
+         CASE ( 4 )
+            AtomicLabel = "Be"
+         CASE ( 5 )
+            AtomicLabel = "B"
+         CASE ( 6 )
+            AtomicLabel = "C"
+         CASE ( 7 )
+            AtomicLabel = "N"
+         CASE ( 8 )
+            AtomicLabel = "O"
+         CASE ( 9 )
+            AtomicLabel = "F"
+         CASE ( 10 )
+            AtomicLabel = "Ne"
+         CASE ( 11 )
+            AtomicLabel = "Na"
+         CASE ( 12 )
+            AtomicLabel = "Mg"
+         CASE ( 13 )
+            AtomicLabel = "Al"
+         CASE ( 14 )
+            AtomicLabel = "Si"
+         CASE ( 15 )
+            AtomicLabel = "P"
+         CASE ( 16 )
+            AtomicLabel = "S"
+         CASE ( 17 )
+            AtomicLabel = "Cl"
+         CASE ( 18 )
+            AtomicLabel = "Ar"
+         CASE DEFAULT
+            WRITE( ErrorMsg, * ) " AtomicLabel: atomic number ",AtomicNumber," is not available "
+            CALL AbortWithError( ErrorMsg )
+      END SELECT
+
+   END FUNCTION AtomicLabel
+
+
+   FUNCTION AtomicMass( AtomicNumber )
+      IMPLICIT NONE
+      INTEGER, INTENT(IN) :: AtomicNumber
+      REAL                :: AtomicMass
+      CHARACTER(100)      :: ErrorMsg
+
+      SELECT CASE( AtomicNumber )
+         CASE ( 1 )
+            AtomicMass = 1.00782503207
+         CASE ( 2 )
+            AtomicMass = 4.00260325415
+         CASE ( 3 )
+            AtomicMass = 7.01600455
+         CASE ( 4 )
+            AtomicMass = 9.0121822
+         CASE ( 5 )
+            AtomicMass = 11.0093054
+         CASE ( 6 )
+            AtomicMass = 12.0000000
+         CASE ( 7 )
+            AtomicMass = 14.0030740048
+         CASE ( 8 )
+            AtomicMass = 15.99491461956
+         CASE ( 9 )
+            AtomicMass = 18.99840322
+         CASE ( 10 )
+            AtomicMass = 19.9924401754
+         CASE ( 11 )
+            AtomicMass = 22.9897692809
+         CASE ( 12 )
+            AtomicMass = 23.985041700
+         CASE ( 13 )
+            AtomicMass = 26.98153863
+         CASE ( 14 )
+            AtomicMass = 27.9769265325
+         CASE ( 15 )
+            AtomicMass = 30.97376163
+         CASE ( 16 )
+            AtomicMass = 31.97207100
+         CASE ( 17 )
+            AtomicMass = 34.96885268
+         CASE ( 18 )
+            AtomicMass = 39.9623831225
+         CASE DEFAULT
+            WRITE( ErrorMsg, * ) " AtomicMass: atomic number ",AtomicNumber," is not available "
+            CALL AbortWithError( ErrorMsg )
+      END SELECT
+      AtomicMass = AtomicMass * MyConsts_Uma2Au
+
+   END FUNCTION AtomicMass
+
 
 END MODULE PotentialModule
 

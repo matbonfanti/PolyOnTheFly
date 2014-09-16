@@ -13,16 +13,16 @@ LOGFILE = yes
 LOGNAME = potf.log
 
 # Compiler ( gfortran, ifort )
-FC = gfortran
+FC = ifort
 
 # Debugging options ( yes or no )
-DEBUG = yes 
+DEBUG = no 
 
 # Optimization level
 OPTLEVEL = 3
 
 # linking FFTW 3.3
-FFTW3 = yes
+FFTW3 = no
 
 # OpenMP libraries
 OPENMP = no 
@@ -349,7 +349,7 @@ all : ${OBJS}
 ${OBJDIR}/%.o : ${SRCDIR}/%.f90
 	${PREPROCESS} ${SRCDIR}/$*.f90 ${PPDIR}/$*.f90
 	${COMPILE} ${PPDIR}/$*.f90 
-	cp -p $*.o $(shell echo $* | tr A-Z a-z).mod ${OBJDIR}
+	cp -fp $*.o $(shell echo $* | tr A-Z a-z).mod ${OBJDIR}
 	rm $*.o $(shell echo $* | tr A-Z a-z).mod
 
 # Make target to build required directories
@@ -375,6 +375,9 @@ clean-doc :
 
 # Very basic files, which everything depends on
 COMMONDEP = Makefile ${OBJDIR}/ErrorTrap.o  ${OBJDIR}/MyConsts.o ${OBJDIR}/MyLinearAlgebra.o  ${SRCDIR}/preprocessoptions.cpp
+
+# SIESTA-AS-A-SUBROUTINE source files
+${OBJDIR}/fsiesta.o               : ${SRCDIR}/fsiesta.f90 Makefile
 
 # Set error and warning procedures
 ${OBJDIR}/ErrorTrap.o             : ${SRCDIR}/ErrorTrap.f90 Makefile
@@ -416,20 +419,11 @@ ${OBJDIR}/ClassicalEqMotion.o     : ${SRCDIR}/ClassicalEqMotion.f90 ${OBJDIR}/Ra
 
 # Module containing the potential energy surface
 ${OBJDIR}/PotentialModule.o       : ${SRCDIR}/PotentialModule.f90 ${OBJDIR}/RandomNumberGenerator.o \
-                                    ${OBJDIR}/MyLinearAlgebra.o ${OBJDIR}/PeriodicBoundary.o                       ${COMMONDEP}
+                                    ${OBJDIR}/MyLinearAlgebra.o ${OBJDIR}/PeriodicBoundary.o        \
+                                    ${OBJDIR}/fsiesta.o                                                            ${COMMONDEP}
 
 # Module containing the subroutines to write output to files
 ${OBJDIR}/OutputModule.o          : ${SRCDIR}/OutputModule.f90 ${OBJDIR}/SharedData.o ${OBJDIR}/VTFFileModule.o \
                                     ${OBJDIR}/UnitConversion.o                                                     ${COMMONDEP}
-
-
-
-
-
-
-
-
-
-
 
 
