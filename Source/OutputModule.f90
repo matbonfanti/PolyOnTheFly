@@ -23,6 +23,7 @@
 MODULE OutputModule
 #include "preprocessoptions.cpp"
    USE SharedData
+   USE PotentialModule
    USE VTFFileModule
    USE UnitConversion
 
@@ -130,6 +131,7 @@ MODULE OutputModule
       LOGICAL, DIMENSION(:,:), ALLOCATABLE :: BondsLogical
       INTEGER :: i, j, jStart, jEnd
       CHARACTER(50) :: OutFileName
+      REAL, DIMENSION(6) :: UnitCellDim
 
       SELECT CASE( Action )
 
@@ -187,7 +189,10 @@ MODULE OutputModule
                      " OutputModule.SingleTrajectoryOutput: output for current trajectory not initialized (print)" )
 
             ! Write trajectory snapshot to VTF output file
-            CALL VTFFile_WriteTimeStep( TrajectoryVTF, X, (/ 10., 10., 10., 90., 90., 90. /) )
+            UnitCellDim = GetUnitCellDimensions( )
+            UnitCellDim(1:3) = UnitCellDim(1:3) * LengthConversion(InternalUnits, InputUnits)
+            UnitCellDim(4:6) = UnitCellDim(4:6) * AngleConversion(InternalUnits, InputUnits)
+            CALL VTFFile_WriteTimeStep( TrajectoryVTF, X*LengthConversion(InternalUnits, InputUnits), UnitCellDim )
 
             ! Write energy values to the total energy file
             WRITE(TrajTotEnergyUnit,800) Time*TimeConversion(InternalUnits, InputUnits),           &

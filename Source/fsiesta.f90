@@ -192,9 +192,9 @@ subroutine siesta_forces( label, na, xa, cell, energy, fa, stress )
   end if
 
 ! Print coords for debugging
-  print'(/,2a)',         'siesta_forces: label = ', trim(label)
-  print'(3a,/,(3f12.6))','siesta_forces: cell (',trim(xunit),') =',c
-  print'(3a,/,(3f12.6))','siesta_forces: xa (',trim(xunit),') =', xa
+!  print'(/,2a)',         'siesta_forces: label = ', trim(label)
+!  print'(3a,/,(3f12.6))','siesta_forces: cell (',trim(xunit),') =',c
+!  print'(3a,/,(3f12.6))','siesta_forces: xa (',trim(xunit),') =', xa
 
 ! Write coordinates to pipe
   iu = p(ip)%iuc
@@ -236,9 +236,9 @@ subroutine siesta_forces( label, na, xa, cell, energy, fa, stress )
   end if
 
 ! Print forces for debugging
-  print'(3a,f12.6)',      'siesta_forces: energy (',trim(eunit),') =', e
-  print'(3a,/,(3f12.6))', 'siesta_forces: stress (',trim(sunit),') =', s
-  print'(3a,/,(3f12.6))', 'siesta_forces: forces (',trim(funit),') =', f
+!  print'(3a,f12.6)',      'siesta_forces: energy (',trim(eunit),') =', e
+!  print'(3a,/,(3f12.6))', 'siesta_forces: stress (',trim(sunit),') =', s
+!  print'(3a,/,(3f12.6))', 'siesta_forces: forces (',trim(funit),') =', f
 
 ! Copy results to output arguments
   if (present(energy)) energy = e

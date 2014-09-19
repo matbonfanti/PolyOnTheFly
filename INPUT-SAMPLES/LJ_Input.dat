@@ -16,27 +16,29 @@ InputFreq   : 18
 
 # System information
 # Number of beads of the RPMD
-NBeads : 4
+NBeads :  10
 # Temperature of the system
-Temperature : 100
+Temperature : 100.
 # Nr of trajectories
-NrTrajs : 1
+NrTrajs : 2
 
 # Output info
 # Time interval between printing step
-PrintTimeStep : 1
+PrintTimeStep : 1.0
 
 # Langevin equilibration parameters
 # Total time of the equilibration
-EquilTotalTime : 100
+# EquilTotalTime : 150.
+EquilTotalTime : 0.
 # Equilibration time step
-EquilTimeStep : 0.200
+EquilTimeStep : 0.05
 # Relaxation rate of the Langevin dynamics
-EquilRelaxTime : 10
+EquilRelaxTime : 50.
 
 # Evolution parameters
 # Step of the time evolution 
 TimeStep : 0.01     
 # Total time of the propagation for each trajectory
-DynamicsTotalTime    :  100          
+# DynamicsTotalTime    : 300.
+DynamicsTotalTime    : 100.
 

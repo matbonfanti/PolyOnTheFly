@@ -1,0 +1,30 @@
+
+# Input units definition
+# length - Angstrom
+InputLength : 1
+# energy - eV
+InputEnergy : 3
+# mass - AMU
+InputMass   : 8
+
+# System id
+# 0 : free particles
+# 1 : lennard-jones gas
+# 2 : SIESTA on-the-fly forces
+SystemNumber : 1
+
+# Periodic boundary conditions settings
+# set PBC
+PBC : TRUE
+# size of the cubic simulation box
+BoxSize : 50
+# number of atoms in the box
+AtomNo : 30
+
+# Lennard-Jones settings
+# Depth of the well of the LJ interaction
+WellDepth : 0.05
+# Equilibrium distance of the LJ interaction
+EquilDist : 3.0
+# Cutoff distance of the pair potential
+CutOff : 20.0

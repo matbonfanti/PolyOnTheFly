@@ -1,0 +1,31 @@
+
+# Input units definition
+# length - Angstrom
+InputLength : 1
+# energy - eV
+InputEnergy : 3
+# mass - AMU
+InputMass   : 8
+
+# System id
+# 0 : free particles
+# 1 : lennard-jones gas
+# 2 : siesta on-the-fly forces
+SystemNumber : 2
+
+# Periodic boundary conditions settings
+# set PBC
+PBC : TRUE
+# number of atoms in the box
+AtomNo : 2
+
+# SIESTA Unit Vectors 
+AUnitVector : 20.0  0. 0.
+BUnitVector : 0.0  20. 0.
+CUnitVector : 0.0  0. 20.
+
+# SIESTA Atoms specification
+AtomicNumbers : 1 1 
+Atom001 :  10.000  10.000  10.0
+Atom002 :  10.000  10.000  10.772231998831
+

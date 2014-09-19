@@ -391,6 +391,7 @@ PROGRAM PolyOnTheFly
       ELSE
          PRINT "(/,A)", " Propagating system in the canonical ensamble with symplectic propagator ... " 
          PotEnergy = GetPotential( X, A )
+         A(:) = A(:) / MassVector(:)
       END IF
 
       KinTimeAverage = 0.0
@@ -400,6 +401,7 @@ PROGRAM PolyOnTheFly
       ! Cycle over the equilibration steps
       DO iStep = 0, EquilNrSteps
 
+         PRINT "(I10,6E20.5)", iStep, A(:)
          IF ( iStep > 0 ) THEN
             ! Propagate for one timestep with Velocity-Verlet
             IF ( NBeads > 1 ) THEN
@@ -487,28 +489,7 @@ PROGRAM PolyOnTheFly
          CALL EOM_RPMSymplectic( MolecularDynamics, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
       ELSE
          PotEnergy = GetPotential( X, A )
-      END IF
-
-      ! Compute average energies
-      CALL KineticAverages( X, V, A, MassVector, KinEnergy, KinPerCoord ) 
-      TotEnergy = PotEnergy + KinEnergy
-      IF ( NBeads > 1 ) THEN
-         ! compute mechanical energy of the ring polymer
-         RPKinEnergy = EOM_KineticEnergy( MolecularDynamics, V )
-         RPPotEnergy = EOM_InterBeadsPotential( MolecularDynamics, X ) + NBeads * PotEnergy
-         RPTotEnergy = RPKinEnergy + RPPotEnergy
-      END IF
-
-      IF ( NBeads > 1 ) THEN
-         PRINT 601, RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                    RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                    RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                    2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
-      ELSE
-         PRINT 601, KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                    PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                    TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                    2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+         A(:) = A(:) / MassVector(:)
       END IF
 
       kStep = 0
@@ -516,6 +497,7 @@ PROGRAM PolyOnTheFly
       ! cycle over nstep velocity verlet iterations
       DO iStep = 0,NrSteps
 
+         PRINT "(I10,6E20.5)", iStep, A(:)
          IF ( iStep > 0 ) THEN 
             ! Propagate for one timestep with Velocity-Verlet
             IF ( NBeads > 1 ) THEN
@@ -550,6 +532,20 @@ PROGRAM PolyOnTheFly
             ! Compute coordinate and velocity centroid
             CentroidPos = CentroidCoord( X )
             CentroidVel = CentroidCoord( V )               
+
+            IF ( iStep == 0 ) THEN
+               IF ( NBeads > 1 ) THEN
+                  PRINT 601, RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                           RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                           RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                           2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+               ELSE
+                  PRINT 601, KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                           PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                           TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                           2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+               END IF
+            END IF
 
             ! Print istantaneous values of the trajectory
             CALL SingleTrajectoryOutput( PRINT_OUTPUT )

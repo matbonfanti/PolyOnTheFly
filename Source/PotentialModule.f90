@@ -30,7 +30,8 @@ MODULE PotentialModule
 
    PRIVATE
 
-   PUBLIC :: SetupPotential, GetInitialPositions, GetAtomsNumber, GetMasses, GetPotential, DisposePotential
+   PUBLIC :: SetupPotential, GetPotential, DisposePotential
+   PUBLIC :: GetUnitCellDimensions, GetInitialPositions, GetAtomsNumber, GetMasses
 
    !> \name SYSTEM ID
    !> Integers number identifying the kind of potential adopted
@@ -195,7 +196,7 @@ MODULE PotentialModule
             CALL WriteSIESTAInput()
 
             ! Initialize SIESTA input units
-!             call siesta_units( 'bohr', 'hartree' )
+             call siesta_units( 'Ang', 'eV' )
             ! Initialize siesta processes
             CALL siesta_launch( TRIM(ADJUSTL(SystemLabel)), 1 )
 
@@ -314,6 +315,29 @@ MODULE PotentialModule
 
 !============================================================================================
 
+   FUNCTION GetUnitCellDimensions( ) RESULT(UnitCell)
+      IMPLICIT NONE
+      REAL, DIMENSION(6) :: UnitCell
+
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetUnitCellDimensions : Module not Setup" )
+
+      IF ( PBC ) THEN
+         UnitCell(1) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,1) ) )
+         UnitCell(2) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,2), UnitVectors(:,2) ) )
+         UnitCell(3) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,3), UnitVectors(:,3) ) )
+         UnitCell(4) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,2), UnitVectors(:,3) ) / UnitCell(2) / UnitCell(3) )
+         UnitCell(5) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,3) ) / UnitCell(1) / UnitCell(3) )
+         UnitCell(6) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,2) ) / UnitCell(1) / UnitCell(2) )
+         UnitCell(4:6) = UnitCell(4:6) 
+      ELSE
+         UnitCell = (/ 1.D100, 1.D+100, 1.D100, 90., 90., 90. /)
+      ENDIF
+
+   END FUNCTION GetUnitCellDimensions
+
+!============================================================================================
+
    REAL FUNCTION GetPotential( X, Force )
       IMPLICIT NONE
       REAL, DIMENSION(:), TARGET, INTENT(IN)  :: X
@@ -341,14 +365,16 @@ MODULE PotentialModule
          CASE( SIESTA_ONTHEFLY ) 
             ! Copy coordianates in x,y,z format
             AtomicPositions = RESHAPE( X, (/ 3, AtomNo /) )
+            AtomicPositions = AtomicPositions * MyConsts_Bohr2Ang 
             ! compute forces with siesta
             IF ( PBC ) THEN
-               CALL siesta_forces( SystemLabel, AtomNo, AtomicPositions, UnitVectors, GetPotential, TmpForces, Stress )
+               CALL siesta_forces( SystemLabel, AtomNo, AtomicPositions, UnitVectors*MyConsts_Bohr2Ang, GetPotential, TmpForces, Stress )
             ELSE
                CALL siesta_forces( label=SystemLabel, na=AtomNo, xa=AtomicPositions, energy=GetPotential, fa=TmpForces )
             END IF
             Force = RESHAPE( TmpForces, (/ 3*AtomNo /) )
-
+            Force = Force / MyConsts_Hartree2eV * MyConsts_Bohr2Ang 
+            GetPotential = GetPotential / MyConsts_Hartree2eV
       END SELECT
 
    END FUNCTION GetPotential
@@ -499,12 +525,15 @@ MODULE PotentialModule
       WRITE( OutputUnit, 300 ) "PolyOnTheFly - Ab Initio Forces", TRIM(ADJUSTL(SystemLabel)), AtomNo, KindOfAtomsNr, &
                                "forces", "100 Ry", "T"
 
-      WRITE( OutputUnit, 300 ) " OccupationFunction         MP      "
-      WRITE( OutputUnit, 300 ) " OccupationMPOrder          5       "
-      WRITE( OutputUnit, 300 ) " ElectronicTemperature      50.0 K  "
-      WRITE( OutputUnit, 300 ) " DM.MixingWeight            0.500   "
-      WRITE( OutputUnit, 300 ) " DM.NumberPulay             5       "
-      WRITE( OutputUnit, 300 ) " DM.Tolerance               1.0d-4  "
+      WRITE( OutputUnit, * ) " OccupationFunction         MP      "
+      WRITE( OutputUnit, * ) " OccupationMPOrder          5       "
+      WRITE( OutputUnit, * ) " ElectronicTemperature      50.0 K  "
+      WRITE( OutputUnit, * ) " PAO.BasisSize              DZ      "
+      WRITE( OutputUnit, * ) " XC.functional              GGA     "
+      WRITE( OutputUnit, * ) " XC.authors                 RPBE    "
+      WRITE( OutputUnit, * ) " DM.MixingWeight            0.500   "
+      WRITE( OutputUnit, * ) " DM.NumberPulay             5       "
+      WRITE( OutputUnit, * ) " DM.Tolerance               1.0d-4  "
 
       WRITE( OutputUnit, 400 ) 
       DO i = 1, KindOfAtomsNr
