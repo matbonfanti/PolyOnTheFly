@@ -401,7 +401,6 @@ PROGRAM PolyOnTheFly
       ! Cycle over the equilibration steps
       DO iStep = 0, EquilNrSteps
 
-         PRINT "(I10,6E20.5)", iStep, A(:)
          IF ( iStep > 0 ) THEN
             ! Propagate for one timestep with Velocity-Verlet
             IF ( NBeads > 1 ) THEN
@@ -497,7 +496,6 @@ PROGRAM PolyOnTheFly
       ! cycle over nstep velocity verlet iterations
       DO iStep = 0,NrSteps
 
-         PRINT "(I10,6E20.5)", iStep, A(:)
          IF ( iStep > 0 ) THEN 
             ! Propagate for one timestep with Velocity-Verlet
             IF ( NBeads > 1 ) THEN
