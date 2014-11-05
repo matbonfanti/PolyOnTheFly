@@ -17,7 +17,10 @@
 !>  \par Updates
 !>  \arg 
 !
-!>  \todo          ____________________________
+!>  \todo          \arg separate input subroutine from setup subroutine
+!>                 \arg logging of input and setup subroutines
+!>                 \arg SIESTA: run calculation in different dir
+!>                 \arg SIESTA: improve definition of input directives
 !>                 
 !***************************************************************************************
 MODULE PotentialModule
