@@ -311,6 +311,16 @@ MODULE OutputModule
             CALL ERROR( DynamicsAveragesStatus /= HAS_DATA, &
                      " OutputModule.DynAveragesOutput: no data to print" )
 
+#if defined(WITH_MPI)
+	    CALL MyMPI_SumToMaster( DynKinEnergy )
+	    CALL MyMPI_SumToMaster( DynPotEnergy )
+            IF ( NBeads > 1 ) THEN
+	       CALL MyMPI_SumToMaster( DynRPKinEnergy )
+	       CALL MyMPI_SumToMaster( DynRPPotEnergy )
+	    END IF
+#endif
+
+	    __MPI_OnlyMasterBEGIN
             ! Normalize by number of trajectories
             DynKinEnergy(:) = DynKinEnergy(:) / NrTrajs
             DynPotEnergy(:) = DynPotEnergy(:) / NrTrajs
@@ -318,6 +328,7 @@ MODULE OutputModule
                DynRPKinEnergy(:) = DynRPKinEnergy(:) / NrTrajs
                DynRPPotEnergy(:) = DynRPPotEnergy(:) / NrTrajs
             END IF            
+	    __MPI_OnlyMasterEND	
 
             ! Now update status variable
             DynamicsAveragesStatus = IS_FINALIZED
@@ -331,6 +342,7 @@ MODULE OutputModule
             CALL ERROR( DynamicsAveragesStatus /= IS_FINALIZED, &
                      " OutputModule.DynAveragesOutput: data has not been finalized" )
 
+	    __MPI_OnlyMasterBEGIN
             ! Open unit to write average energy
             DynTotEnergyUnit = LookForFreeUnit()
             OPEN( FILE="Dyn_TotEnergy.dat", UNIT=DynTotEnergyUnit )
@@ -373,6 +385,7 @@ MODULE OutputModule
             ! Deallocate memory
             DEALLOCATE( DynKinEnergy, DynPotEnergy )
             IF (NBeads > 1) DEALLOCATE( DynRPKinEnergy, DynRPPotEnergy ) 
+	    __MPI_OnlyMasterEND
 
             ! Now update status variable
             DynamicsAveragesStatus = IS_NOT_SET_UP
@@ -449,6 +462,16 @@ MODULE OutputModule
             CALL ERROR( EquilibrationAveragesStatus /= HAS_DATA, &
                      " OutputModule.EquilAveragesOutput: no data to print" )
 
+#if defined(WITH_MPI)
+	    CALL MyMPI_SumToMaster( EquilKinEnergy )
+	    CALL MyMPI_SumToMaster( EquilPotEnergy )
+            IF ( NBeads > 1 ) THEN
+	       CALL MyMPI_SumToMaster( EquilRPKinEnergy )
+	       CALL MyMPI_SumToMaster( EquilRPPotEnergy )
+	    END IF
+#endif
+
+	    __MPI_OnlyMasterBEGIN
             ! Normalize by number of trajectories
             EquilKinEnergy(:) = EquilKinEnergy(:) / NrTrajs
             EquilPotEnergy(:) = EquilPotEnergy(:) / NrTrajs
@@ -456,6 +479,7 @@ MODULE OutputModule
                EquilRPKinEnergy(:) = EquilRPKinEnergy(:) / NrTrajs
                EquilRPPotEnergy(:) = EquilRPPotEnergy(:) / NrTrajs
             END IF            
+	    __MPI_OnlyMasterEND
 
             ! Now update status variable
             EquilibrationAveragesStatus = IS_FINALIZED
@@ -469,6 +493,7 @@ MODULE OutputModule
             CALL ERROR( EquilibrationAveragesStatus /= IS_FINALIZED, &
                      " OutputModule.EquilAveragesOutput: data has not been finalized" )
 
+	    __MPI_OnlyMasterBEGIN
             ! Open unit to write average energy
             EquilTotEnergyUnit = LookForFreeUnit()
             OPEN( FILE="Equil_TotEnergy.dat", UNIT=EquilTotEnergyUnit )
@@ -511,6 +536,7 @@ MODULE OutputModule
             ! Deallocate memory
             DEALLOCATE( EquilKinEnergy, EquilPotEnergy )
             IF (NBeads > 1) DEALLOCATE( EquilRPKinEnergy, EquilRPPotEnergy ) 
+	    __MPI_OnlyMasterEND
 
             ! Now update status variable
             EquilibrationAveragesStatus = IS_NOT_SET_UP

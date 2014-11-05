@@ -55,8 +55,11 @@ PROGRAM PolyOnTheFly
    INTEGER, DIMENSION(8)    :: Time1, Time2
    
    ! MPI data
-   INTEGER :: CurrentMPITask = 0
-   
+   integer, allocatable :: my_traj(:)
+   INTEGER :: jj   
+   INTEGER :: LogUnit
+   CHARACTER(3) :: trivial
+
    INTEGER :: iCoord
    
    ! 1) INPUT SECTION
@@ -78,12 +81,18 @@ PROGRAM PolyOnTheFly
 
    ! 5) CONCLUSION AND AVERAGES
    
+#if defined(WITH_MPI)
+   CALL MyMPI_Init()
+   WRITE(*,*) 'Process ', my_rank, ' of ', num_procs, ' is alive '
+#endif
+
+   __MPI_OnlyMasterBEGIN
    PRINT "(/,     '                    ==============================')"
    PRINT "(       '                              PolyOnTheFly        ')"
    PRINT "(       '                    ==============================',2/)"
    PRINT "(       '                  Author: Matteo Bonfanti, August 2014  ')"
    PRINT "(       '         On-The-Fly Ring Polymer Molecular Dynamics code in FORTRAN 90/95   ',2/)"
-
+   __MPI_OnlyMasterEND
    
    !*************************************************************
    !         COMMAND LINE ARGUMENT
@@ -97,13 +106,17 @@ PROGRAM PolyOnTheFly
       CALL GET_COMMAND_ARGUMENT( 1, InputFileName )
       IF ( trim(InputFileName) == "help" ) Help = .TRUE.
    ENDIF
+   __MPI_OnlyMasterBEGIN
    IF (Help) THEN ! Call help
       PRINT*, ' Launch this program as:'
       PRINT*, ' % PolyOnTheFly "InputFileName" '
       STOP
+   __MPI_OnlyMasterEND
    ENDIF
 
+   __MPI_OnlyMasterBEGIN
    CALL date_and_time (values=Time1)
+   __MPI_OnlyMasterEND
 
    !*************************************************************
    !         INPUT SECTION
@@ -160,14 +173,17 @@ PROGRAM PolyOnTheFly
    !         SETUP SECTION 
    !*************************************************************
 
-   ! >>>>>>>>>>>>>>>>>>>> HERE THE MPI FORK >>>>>>>>>>>>>>>>>>>>>>>>
-
-   CurrentMPITask = 1      ! SERIAL EXECUTION
-
    ! >>> SEND DATA TO SLAVES
    ! >>> DEFINE SET OF INDICES of iTraj TO RUN ON EACH SLAVE
    
    CALL Setup( )
+
+   allocate( my_traj(NrTrajs) )  
+
+   DO jj=1, NrTrajs
+         my_traj(jj) = MOD(jj,__MPI_TotalNrOfProcs)
+	 __MPI_OnlyMasterBEGIN  print*,'jj',jj, 'my_traj', my_traj(jj) __MPI_OnlyMasterEND
+   END DO
 
 !    CALL CheckForces( )
 
@@ -175,21 +191,32 @@ PROGRAM PolyOnTheFly
    !         RUN SECTION 
    !*************************************************************
 
+   __MPI_OnlyMasterBEGIN
    PRINT "(A,I5,A)"," Running ", NrTrajs, " trajectories ... "
+   __MPI_OnlyMasterEND
+
+   LogUnit = __MPI_CurrentNrOfProc+10
+   OPEN(UNIT= LogUnit, FILE='OutputProc'//trim(rank)//'.log')
 
    DO iTraj = 1, NrTrajs
 
-      PRINT "(2/,A)", "***************************************************"
-      PRINT "(A,I4)", "            Trajectory Nr. ", iTraj
-      PRINT "(A,/)" , "***************************************************"
+      IF ( my_traj(iTraj) == __MPI_CurrentNrOfProc ) then
 
-      CALL InitializeTrajectory()
+	 WRITE(LogUnit, "(2/,A)") "***************************************************"
+	 WRITE(LogUnit, "(A,I4)") "            Trajectory Nr. ", iTraj
+	 WRITE(LogUnit, "(A,/)" ) "***************************************************"
 
-      CALL Thermalization( )
-      CALL DynamicsRun( )
+	 CALL InitializeTrajectory()
+
+	 CALL Thermalization( )
+	 CALL DynamicsRun( )
+
+      END IF
 
    END DO
-   
+
+   CLOSE( LogUnit )
+
    !*************************************************************
    !         AVERAGES AND OUTPUT SECTION 
    !*************************************************************
@@ -203,11 +230,17 @@ PROGRAM PolyOnTheFly
    
    ! DISPOSE SUBROUTINE
   
+   __MPI_OnlyMasterBEGIN
    CALL date_and_time (values=Time2)
    
    WRITE(*,*)
    WRITE(*,"(A,F10.1,A)") " Execution Time : ",TimeDifference( Time2, Time1 )/1000.0, " / s "
-   
+   __MPI_OnlyMasterEND
+
+#if defined(WITH_MPI)
+   CALL MyMPI_Finalize()
+#endif
+
   
 !============================================================================================
                                   CONTAINS
@@ -309,7 +342,7 @@ PROGRAM PolyOnTheFly
       REAL :: WellDepth, EquilDist
 
       ! Initialize random number seed
-      CALL SetSeed( RandomNr, -CurrentMPITask )
+      CALL SetSeed( RandomNr, - (1 + __MPI_CurrentNrOfProc ) )
 
       ! Initialize system parameters and potential related subroutines
       CALL SetupPotential( "potential.dat" )
@@ -386,10 +419,10 @@ PROGRAM PolyOnTheFly
 
       ! Initialize forces
       IF ( NBeads > 1 ) THEN
-         PRINT "(/,A)", " Propagating system in the canonical ensamble with PILE ... " 
+         WRITE(LogUnit,"(/,A)") " Propagating system in the canonical ensamble with PILE ... " 
          CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
       ELSE
-         PRINT "(/,A)", " Propagating system in the canonical ensamble with symplectic propagator ... " 
+         WRITE(LogUnit,"(/,A)") " Propagating system in the canonical ensamble with symplectic propagator ... " 
          PotEnergy = GetPotential( X, A )
          A(:) = A(:) / MassVector(:)
       END IF
@@ -452,12 +485,12 @@ PROGRAM PolyOnTheFly
       
       END DO
       
-      PRINT "(A)", " Thermalization completed! "
+      WRITE(LogUnit,"(A)") " Thermalization completed! "
 
       KinTimeAverage = KinTimeAverage / kStep
       KinTimeStDev = SQRT( KinTimeStDev / kStep - KinTimeAverage**2 )
 
-      PRINT 600, KinTimeAverage*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+      WRITE(LogUnit,600) KinTimeAverage*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                  KinTimeStDev*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                  2.0*KinTimeAverage/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
 
@@ -478,7 +511,7 @@ PROGRAM PolyOnTheFly
       IMPLICIT NONE
       INTEGER :: iStep
 
-      PRINT "(/,A)", " Propagating system in the microcanonical ensamble... " 
+      WRITE(LogUnit,"(/,A)") " Propagating system in the microcanonical ensamble... " 
 
       ! Bring the atomic coordinates to the first unit cell
       CALL PBC_BringToFirstCell( X, NBeads )
@@ -533,12 +566,12 @@ PROGRAM PolyOnTheFly
 
             IF ( iStep == 0 ) THEN
                IF ( NBeads > 1 ) THEN
-                  PRINT 601, RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                  WRITE(LogUnit,601) RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                            RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                            RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                            2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
                ELSE
-                  PRINT 601, KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+                  WRITE(LogUnit,601) KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
                            PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
                            TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
                            2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
@@ -555,15 +588,15 @@ PROGRAM PolyOnTheFly
 
       END DO
 
-      PRINT "(A)", " Time propagation completed! "
+      WRITE(LogUnit,"(A)") " Time propagation completed! "
 
       IF ( NBeads > 1 ) THEN
-         PRINT 602, RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+         WRITE(LogUnit,602) RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                     RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                     RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
                     2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
       ELSE
-         PRINT 602, KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
+         WRITE(LogUnit,602) KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
                     PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
                     TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
                     2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 

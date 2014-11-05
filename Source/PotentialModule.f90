@@ -97,6 +97,7 @@ MODULE PotentialModule
       ! exit if module is setup
       IF ( PotentialModuleIsSetup ) RETURN
 
+      __MPI_OnlyMasterBEGIN
       ! Open potential input file
       CALL OpenFile( PotentialData, PotentialFileName )
 
@@ -104,15 +105,22 @@ MODULE PotentialModule
       CALL SetFieldFromInput( PotentialData, "InputLength", InputLength,  1 )
       CALL SetFieldFromInput( PotentialData, "InputEnergy", InputEnergy,  3 )
       CALL SetFieldFromInput( PotentialData, "InputMass", InputMass,  8 )
-      ! Setup conversion factors from potential to internal units
-      CALL Initialize_UnitConversion( PotentialUnits, InputLength, InputEnergy, InputMass, 11, 12, 15, 17 )
 
       ! Read system number
       CALL SetFieldFromInput( PotentialData, "SystemNumber", SystemNumber )
+      __MPI_OnlyMasterEND
+
+      CALL MyMPI_BroadcastToSlaves( InputLength ) 
+      CALL MyMPI_BroadcastToSlaves( InputEnergy ) 
+      CALL MyMPI_BroadcastToSlaves( InputMass ) 
+      CALL MyMPI_BroadcastToSlaves( SystemNumber ) 
 
       ! Check if the potential id number is valid
       WRITE(ErrorMsg,*) " PotentialModule.SetupPotential : no potential corresponds to Id = ", SystemNumber
       CALL ERROR ( .NOT. PotentialIdExists(SystemNumber),  ErrorMsg )
+
+      ! Setup conversion factors from potential to internal units
+      CALL Initialize_UnitConversion( PotentialUnits, InputLength, InputEnergy, InputMass, 11, 12, 15, 17 )
 
       ! Depending on system number, different setup operations
       SELECT CASE( SystemNumber )
@@ -133,6 +141,7 @@ MODULE PotentialModule
          ! Gas of LJ particles
          CASE( LJ_PAIR_POTENTIAL )
 
+            __MPI_OnlyMasterBEGIN
             ! number of particles
             CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
             ! periodic system
@@ -140,7 +149,6 @@ MODULE PotentialModule
             ! Size of the simulation box
             IF ( PBC ) THEN
                CALL SetFieldFromInput( PotentialData, "BoxSize", BoxSize )
-               CALL PBC_Setup( (/ BoxSize, 0.0, 0.0 /), (/ 0.0, BoxSize, 0.0 /), (/ 0.0, 0.0, BoxSize /) )
             END IF
 
             ! Store the pair potential parameters
@@ -152,6 +160,18 @@ MODULE PotentialModule
             ! Set the cutoff distance of the pair potential
             CALL SetFieldFromInput(PotentialData,"CutOff",CutOff,LJ_EquilDist*LengthConversion(InternalUnits,PotentialUnits)*6.0)
             CutOff = CutOff * LengthConversion( PotentialUnits, InternalUnits )
+            __MPI_OnlyMasterEND
+
+            CALL MyMPI_BroadcastToSlaves( AtomNo )
+            CALL MyMPI_BroadcastToSlaves( PBC )
+            CALL MyMPI_BroadcastToSlaves( BoxSize )
+            CALL MyMPI_BroadcastToSlaves( LJ_WellDepth )
+            CALL MyMPI_BroadcastToSlaves( LJ_EquilDist )
+            CALL MyMPI_BroadcastToSlaves( CutOff )
+
+            IF ( PBC ) THEN
+              CALL PBC_Setup( (/ BoxSize, 0.0, 0.0 /), (/ 0.0, BoxSize, 0.0 /), (/ 0.0, 0.0, BoxSize /) )
+            END IF
 
             ! Check how many image atoms should be included in the pair potential summation
             CALL SetNearTranslations( )
@@ -202,8 +222,10 @@ MODULE PotentialModule
 
       END SELECT
 
+      __MPI_OnlyMasterBEGIN
       ! close input file
       CALL CloseFile( PotentialData )
+      __MPI_OnlyMasterEND
 
       ! Module is now ready
       PotentialModuleIsSetup = .TRUE.
@@ -331,7 +353,7 @@ MODULE PotentialModule
          UnitCell(6) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,2) ) / UnitCell(1) / UnitCell(2) )
          UnitCell(4:6) = UnitCell(4:6) 
       ELSE
-         UnitCell = (/ 1.D100, 1.D+100, 1.D100, 90., 90., 90. /)
+         UnitCell = (/ REAL(1.E+100), REAL(1.E+100), REAL(1.E+100), REAL(90.), REAL(90.), REAL(90.) /)
       ENDIF
 
    END FUNCTION GetUnitCellDimensions
@@ -368,7 +390,8 @@ MODULE PotentialModule
             AtomicPositions = AtomicPositions * MyConsts_Bohr2Ang 
             ! compute forces with siesta
             IF ( PBC ) THEN
-               CALL siesta_forces( SystemLabel, AtomNo, AtomicPositions, UnitVectors*MyConsts_Bohr2Ang, GetPotential, TmpForces, Stress )
+               CALL siesta_forces( SystemLabel, AtomNo, AtomicPositions, UnitVectors*MyConsts_Bohr2Ang, &
+                             GetPotential, TmpForces, Stress )
             ELSE
                CALL siesta_forces( label=SystemLabel, na=AtomNo, xa=AtomicPositions, energy=GetPotential, fa=TmpForces )
             END IF

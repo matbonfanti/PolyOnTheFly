@@ -88,7 +88,7 @@ PRIVATE ! Nothing is declared public beyond this point
 
 ! Global module variables
   integer, parameter :: max_procs = 100
-  integer, parameter :: dp = kind(1.d0)
+  integer, parameter :: dp = kind(1.0)
   type(proc),   save :: p(max_procs)
   integer,      save :: np=0
   character(len=32), save :: xunit = 'Ang'

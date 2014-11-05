@@ -13,7 +13,7 @@ LOGFILE = yes
 LOGNAME = potf.log
 
 # Compiler ( gfortran, ifort )
-FC = ifort
+FC = gfortran
 
 # Debugging options ( yes or no )
 DEBUG = no 
@@ -26,6 +26,9 @@ FFTW3 = no
 
 # OpenMP libraries
 OPENMP = no 
+
+# OpenMP libraries
+MPI = yes 
 
 # linking LAPACK and BLAS 
 LAPACK = yes
@@ -63,6 +66,7 @@ LOGFILE := $(strip ${LOGFILE})
 LOGNAME := $(strip ${LOGNAME})
 FFTW3 := $(strip ${FFTW3})
 OPENMP := $(strip ${OPENMP})
+MPI := $(strip ${MPI})
 
 
 #----------------------------------------------------------------------------
@@ -105,6 +109,11 @@ ifeq (${FC},gfortran)
 
    # Flag to specify the position of mod files
    MODULEFLG = -fintrinsic-modules-path
+
+   # Change name of the compiler if MPI wrapper is needed
+   ifeq (${MPI},yes)
+     FC = mpif90
+   endif
 
 endif
 
@@ -203,6 +212,45 @@ ifeq (${FC},fermi)
 
 endif
 
+ifeq (${FC},PLX)
+
+   # Optimization flag
+   O0FLAGS  = -O0
+   O1FLAGS  = -O1
+   O2FLAGS  = -O2
+   O3FLAGS  = -O3
+
+   # Debug flag
+   DEBUGFLG = -g -fbounds-check
+
+   # LAPACK AND BLAS flags
+   # GNU Lapack and Blas flags 
+   LAPACKFLG = -L\$(LAPACK_LIB) -llapack -L\$(BLAS_LIB) -lblas
+
+   # FFTW3 flags
+   FFTW3FLG = -lfftw3
+   FFTW3COMPILE = -I/usr/local/include/ 
+
+   # OPENMP flags
+   OPENMPFLG = -fopenmp
+
+   # Data type
+   DATAFLG =
+   ifeq (${REAL8},yes)
+	DATAFLG = -fdefault-real-8
+   endif
+
+   # Flag to specify the position of mod files
+   MODULEFLG = -fintrinsic-modules-path
+
+   # Change name of the compiler if MPI wrapper is needed
+   ifeq (${MPI},yes)
+     FC = mpif90
+   endif
+
+endif
+
+
 
 #----------------------------------------------------------------------------
 #              Setup preprocessing options 
@@ -235,6 +283,11 @@ ifeq (${OPENMP}, yes)
    PPDEFINE += -DWITH_OPENMP
 endif
 
+# Preprocess with MPI
+ifeq (${MPI}, yes)
+   PPDEFINE += -DWITH_MPI
+endif
+    
 
 #----------------------------------------------------------------------------
 #              Setup linking and compilation flags
@@ -374,7 +427,7 @@ clean-doc :
 # --------------------------------------------------------------------------------------------
 
 # Very basic files, which everything depends on
-COMMONDEP = Makefile ${OBJDIR}/ErrorTrap.o  ${OBJDIR}/MyConsts.o ${OBJDIR}/MyLinearAlgebra.o  ${SRCDIR}/preprocessoptions.cpp
+COMMONDEP = Makefile ${OBJDIR}/ErrorTrap.o  ${OBJDIR}/MyConsts.o ${OBJDIR}/MyLinearAlgebra.o ${OBJDIR}/MyMPI.o ${SRCDIR}/preprocessoptions.cpp
 
 # SIESTA-AS-A-SUBROUTINE source files
 ${OBJDIR}/fsiesta.o               : ${SRCDIR}/fsiesta.f90 Makefile
