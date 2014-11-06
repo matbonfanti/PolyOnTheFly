@@ -21,7 +21,7 @@
 !>  \par Updates
 !>  \arg ________________________________
 !
-!>  \todo  
+!>  \todo            \arg Put status check at the beginning of all the subroutines
 !>                 
 !***************************************************************************************
 MODULE MyMPI
@@ -30,10 +30,10 @@ MODULE MyMPI
    include 'mpif.h'
 #endif
 
-
    PRIVATE
-   PUBLIC :: MyMPI_Init, MyMPI_SumToMaster, MyMPI_Finalize, MyMPI_BroadcastToSlaves
-
+   PUBLIC :: MyMPI_Init, MyMPI_Barrier, MyMPI_Finalize
+   PUBLIC :: MyMPI_SumToMaster, MyMPI_BroadcastToSlaves, MyMPI_AllReduceMaxValue
+   
    !> Setup variable of the module
    LOGICAL :: MyMPISetup = .FALSE.
 
@@ -77,6 +77,25 @@ MODULE MyMPI
 
    END SUBROUTINE MyMPI_Init
 
+   
+!*******************************************************************************
+! MyMPI_Barrier
+!*******************************************************************************
+!>  Wrapper for defining a MPI barrier
+!*******************************************************************************
+   SUBROUTINE MyMPI_Barrier(  )
+      IMPLICIT NONE
+
+      ! INSERT HERE THE CHECK ON THE MODULE STATUS
+ 
+      CALL FLUSH()
+#if defined(WITH_MPI)
+      CALL MPI_Barrier(MPI_COMM_WORLD,err)
+#endif
+
+   END SUBROUTINE MyMPI_Barrier
+   
+   
 !*******************************************************************************
 ! MyMPI_SumToMaster
 !*******************************************************************************
@@ -98,6 +117,24 @@ MODULE MyMPI
 #endif
 
    END SUBROUTINE MyMPI_SumToMaster
+   
+!*******************************************************************************
+! MyMPI_AllReduceMaxValue
+!*******************************************************************************
+!>  On all the nodes set the maximum values of integer variables
+!*******************************************************************************
+   SUBROUTINE MyMPI_AllReduceMaxValue( IntegerVar )
+      IMPLICIT NONE
+      INTEGER :: IntegerVar
+
+      ! INSERT HERE THE CHECK ON THE MODULE STATUS
+
+#if defined(WITH_MPI)
+      CALL MPI_Barrier(MPI_COMM_WORLD,err)
+      CALL MPI_AllReduce( IntegerVar, IntegerVar, 1, MPI_INTEGER, MPI_MAX, MPI_COMM_WORLD, err)
+#endif
+
+   END SUBROUTINE MyMPI_AllReduceMaxValue
 
 
 !*******************************************************************************

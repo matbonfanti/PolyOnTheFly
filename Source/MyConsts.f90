@@ -162,32 +162,24 @@ CONTAINS
                                       "PrintTools: No free I/O unit available")
    END FUNCTION LookForFreeUnit
 
+   
 !*******************************************************************************
 ! NumberToString
 !*******************************************************************************
-!>  Given an integer number within 0 and 999, five back a 3 character string
-!>  of the number with zeros instead of null characters.
+!>  Given an integer number, give back a character string of the number.
 !> 
 !> @param    N        Input integer number.
 !> @returns           A string with the number.
 !*******************************************************************************
-!    FUNCTION NumberToString( N )      RESULT( String )
-!    IMPLICIT NONE
-!       INTEGER, INTENT(IN)   :: N
-!       CHARACTER(3)          :: String
-! 
-!       SELECT CASE ( N )
-!          CASE ( 0:9 )
-!             WRITE(String,"(A2,I1)")  "00", N
-!          CASE ( 10:99 )
-!             WRITE(String,"(A1,I2)")  "0", N
-!          CASE ( 100:999 )
-!             WRITE(String,"(I3)")      N
-!          CASE DEFAULT
-!             CALL AbortwithError( "NumberToString: N too large " )
-!       END SELECT
-! 
-!    END FUNCTION NumberToString
+   FUNCTION NumberToString( N )      RESULT( String )
+   IMPLICIT NONE 
+      INTEGER, INTENT(IN)   :: N
+      CHARACTER(200)         :: String
+
+      WRITE(String,*) N
+      String = ADJUSTL(String)
+   END FUNCTION NumberToString
+   
    
 !*******************************************************************************
 ! CountLinesInFile

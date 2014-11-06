@@ -307,6 +307,10 @@ MODULE OutputModule
          CASE( FINALIZE_AVERAGES )
 !******************************************************************************************************
 
+#if defined(WITH_MPI)
+            CALL MyMPI_AllReduceMaxValue(DynamicsAveragesStatus)
+#endif
+
             ! Check if current trajectory output has correct status
             CALL ERROR( DynamicsAveragesStatus /= HAS_DATA, &
                      " OutputModule.DynAveragesOutput: no data to print" )
@@ -457,6 +461,10 @@ MODULE OutputModule
 !******************************************************************************************************
          CASE( FINALIZE_AVERAGES )
 !******************************************************************************************************
+
+#if defined(WITH_MPI)
+            CALL MyMPI_AllReduceMaxValue(EquilibrationAveragesStatus)
+#endif
 
             ! Check if current trajectory output has correct status
             CALL ERROR( EquilibrationAveragesStatus /= HAS_DATA, &

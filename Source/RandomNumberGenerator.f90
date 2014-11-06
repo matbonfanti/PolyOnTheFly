@@ -18,6 +18,8 @@
 !>       are now thread safe, and different initial seeds can be set by using 
 !>       different RNGInternalState variables and initializing them with different
 !>       calls of SetSeed. Thus the module is ready to be used for parallel applications
+!>  \arg 6 November 2014 : added function to get internal state of the random number
+!>       generator
 !
 !>  \todo          ....
 !>                 
@@ -38,7 +40,7 @@ MODULE RandomNumberGenerator
 
    PRIVATE
    PUBLIC :: RNGInternalState
-   PUBLIC :: SetSeed, UniformRandomNr, GaussianRandomNr
+   PUBLIC :: SetSeed, GetInternalState, UniformRandomNr, GaussianRandomNr
    PUBLIC :: TestGaussianDistribution, TestGaussianDistribution2, TestCorrelations
 
    ! Integer type for the random number generation
@@ -74,7 +76,7 @@ MODULE RandomNumberGenerator
       
       ! Initialize internal state of the RNG 
       IntState%am   = 0.0
-      IntState%ix   = -1
+      IntState%ix   = INT( Seed, K4B )
       IntState%iy   = -1
       IntState%k    = 0
       
@@ -84,6 +86,20 @@ MODULE RandomNumberGenerator
       
    END SUBROUTINE SetSeed
  
+
+! Get internal status of the  random number generation from the internal variables
+! of the RNGInternalState data type
+
+   FUNCTION GetInternalState( IntState )
+      IMPLICIT NONE
+      INTEGER, DIMENSION(2)               :: GetInternalState
+      TYPE( RNGInternalState), INTENT(IN) :: IntState
+
+      ! Get integer variables ix and iy
+      GetInternalState(1) = IntState%ix
+      GetInternalState(2) = IntState%iy
+      
+   END FUNCTION GetInternalState
   
 !****************************************************************************
 

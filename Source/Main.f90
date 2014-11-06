@@ -16,9 +16,10 @@
 !***************************************************************************************
 !
 !>  \par Updates
-!>  \arg 
+!>  \arg  6 November 2014 : new MPI version with master reading input files and 
+!>                          broadcasting data across the nodes
 !
-!>  \todo          ____________________________
+!>  \todo          \arg Set normal termination of the MPI execution in case of error
 !>                 
 !***************************************************************************************
 
@@ -37,8 +38,7 @@ PROGRAM PolyOnTheFly
    
    IMPLICIT NONE
 
-   ! FEW VARIABLES HERE
-   ! DEFINE MOST VARIABLES IN SharedData MODULE
+   ! FEW VARIABLES HERE, DEFINE MOST VARIABLES IN SharedData MODULE
 
    ! Variable to handle the command line
    INTEGER :: NArgs
@@ -53,25 +53,41 @@ PROGRAM PolyOnTheFly
       
    ! keep track of initial time and final time
    INTEGER, DIMENSION(8)    :: Time1, Time2
-   
-   ! MPI data
-   integer, allocatable :: my_traj(:)
-   INTEGER :: jj   
-   INTEGER :: LogUnit
-   CHARACTER(3) :: trivial
 
-   INTEGER :: iCoord
+   ! MPI data
+   INTEGER, DIMENSION(:), ALLOCATABLE :: NodeOfTraj
+   INTEGER, DIMENSION(:), ALLOCATABLE :: NrOfTrajPerNode
+
+   ! General integer counters
+   INTEGER :: iCoord, iNode
+   
+   ! Output data
+   INTEGER, DIMENSION(2) :: OutputSet0
+   REAL, DIMENSION(3)    :: OutputSet1
+   REAL, DIMENSION(4)    :: OutputSet2
+   REAL, DIMENSION(4)    :: OutputSet3
+   
+   ! =========================================================================
+  !                         CODE STRUCTURE
+   ! =========================================================================
+   
+   ! (*) = ONLY THE MASTER NODE
    
    ! 1) INPUT SECTION
-   !    read info about the molecular system
-   !    define parameters of the method
+   !    read input data from file (*)
+   !    process data and convert to internal units (*)
+   !    syncronizing data across all the nodes
+   
+   ! NOTE: data about the potential are read and processed at the same time
+   !       but the code is included in the potential module
    
    ! 2) SETUP SECTION
-   !    memory allocation
+   !    set random number seed generator ( PARALLEL: 1 + MPI_ID )
    !    setup potential
-   !    setup propagation
-   !    setup random number generator ( parallel )
-   !    (other)
+   !    memory allocation for the trajectory
+   !    setup propagation data for equilibration and microcanonical dynamics
+   !    setup of istantaneous and global averages
+   !    setup partitioning of the trajectories over the nodes
   
    ! CYCLE OVER THE TRAJECTORIES
    
@@ -81,9 +97,21 @@ PROGRAM PolyOnTheFly
 
    ! 5) CONCLUSION AND AVERAGES
    
+   ! =========================================================================
+   
 #if defined(WITH_MPI)
    CALL MyMPI_Init()
-   WRITE(*,*) 'Process ', my_rank, ' of ', num_procs, ' is alive '
+   __MPI_OnlyMasterBEGIN 
+   WRITE(*,"(/,A)") " Running application with MPI parallelization "
+   WRITE(*,*)        "Executable compilation ", __DATE__, " ", __TIME__
+   __MPI_OnlyMasterEND
+   CALL MyMPI_Barrier()
+   WRITE(*,"(A,A,A,A,A)") ' Process ',TRIM((NumberToString(__MPI_CurrentNrOfProc))), &
+                            ' of ', TRIM(NumberToString(__MPI_TotalNrOfProcs)), ' is alive '
+   CALL MyMPI_Barrier()
+#else
+   WRITE(*,"(/,A)") " Running serial application "
+   WRITE(*,*)        "Executable compilation ", __DATE__, " ",__TIME__
 #endif
 
    __MPI_OnlyMasterBEGIN
@@ -93,7 +121,7 @@ PROGRAM PolyOnTheFly
    PRINT "(       '                  Author: Matteo Bonfanti, August 2014  ')"
    PRINT "(       '         On-The-Fly Ring Polymer Molecular Dynamics code in FORTRAN 90/95   ',2/)"
    __MPI_OnlyMasterEND
-   
+      
    !*************************************************************
    !         COMMAND LINE ARGUMENT
    !*************************************************************
@@ -104,14 +132,15 @@ PROGRAM PolyOnTheFly
       Help = .TRUE.
    ELSE
       CALL GET_COMMAND_ARGUMENT( 1, InputFileName )
-      IF ( trim(InputFileName) == "help" ) Help = .TRUE.
+      IF ( trim(adjustl(InputFileName)) == "help" ) Help = .TRUE.
    ENDIF
-   __MPI_OnlyMasterBEGIN
    IF (Help) THEN ! Call help
-      PRINT*, ' Launch this program as:'
-      PRINT*, ' % PolyOnTheFly "InputFileName" '
+      __MPI_OnlyMasterBEGIN
+      WRITE(*,"(A)")   '   Launch this program as:'
+      WRITE(*,"(A,/)") '   % PolyOnTheFly "InputFileName" '
+      __MPI_OnlyMasterEND
+      CALL MyMPI_Finalize()
       STOP
-   __MPI_OnlyMasterEND
    ENDIF
 
    __MPI_OnlyMasterBEGIN
@@ -127,6 +156,7 @@ PROGRAM PolyOnTheFly
    !     it is distributed to all the slaves
    !*************************************************************
 
+   __MPI_OnlyMasterBEGIN
    ! Open and read from input file the input parameters of the calculation
    CALL OpenFile( InputData, InputFileName )
 
@@ -138,84 +168,128 @@ PROGRAM PolyOnTheFly
    ! close input file
    CALL CloseFile( InputData )
 
-   !       WRITE(*, 902) NBeads, BeadsFrequency/MyConsts_cmmin1toAU
-! 
-!       IF ( .NOT. MorsePotential ) THEN
-!            WRITE(*, 903) InitEnergy*MyConsts_Hartree2eV, (InitEnergy-MinimumEnergy)*MyConsts_Hartree2eV
-!       ELSE 
-!            WRITE(*, 903) InitEnergy*MyConsts_Hartree2eV, (InitEnergy+MorseDe)*MyConsts_Hartree2eV
-!       END IF
-! 
-!       WRITE(*, 904) NrTrajs, TimeStep/MyConsts_fs2AU, NrOfSteps, NrOfPrintSteps
-! 
-!       WRITE(*, 905) Temperature/MyConsts_K2AU
-! 
-! 
-!    902 FORMAT(" * Nr of replicas in the ring polymer dynamics: ", I10,/, &
-!               " * Frequency of the force between the beads     ", F10.4,/ )
-! 
-!    903 FORMAT(" * Initial conditions of the atom-surface system ", /,&
-!               " * Absolute initial energy (eV):                ",F10.4,/,& 
-!               " *  - w.r.t. the bottom of the well (eV):       ",F10.4,/ )
-! 
-!    904 FORMAT(" * Dynamical simulation variables               ", /,&
-!               " * Nr of trajectories:                          ",I10,  /,& 
-!               " * Propagation time step (fs):                  ",F10.4,/,& 
-!               " * Nr of time steps of each trajectory:         ",I10,  /,& 
-!               " * Nr of print steps of each trajectory:        ",I10,  / )
-! 
-!    905 FORMAT(" * Bath equilibration variables                 ", /,&
-!               " * Temperature of the surface:                  ",F10.4 )
+   WRITE(*, 902) NrTrajs, NBeads, Temperature*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits),  &
+                 BeadsFrequency*FreqConversion(InternalUnits, InputUnits), FreqUnit(InputUnits)
 
+   WRITE(*, 903) EquilTotalTime*TimeConversion(InternalUnits, InputUnits), TimeUnit(InputUnits),    &
+                 EquilTimeStep*TimeConversion(InternalUnits, InputUnits), TimeUnit(InputUnits),     &
+                 PrintTimeStep*TimeConversion(InternalUnits, InputUnits), TimeUnit(InputUnits),     &
+                 (1./LangevinGamma)*TimeConversion(InternalUnits, InputUnits), TimeUnit(InputUnits) 
 
+   WRITE(*, 904) DynamicsTotalTime*TimeConversion(InternalUnits, InputUnits), TimeUnit(InputUnits), &
+                 TimeStep*TimeConversion(InternalUnits, InputUnits), TimeUnit(InputUnits),          &
+                 PrintTimeStep*TimeConversion(InternalUnits, InputUnits), TimeUnit(InputUnits) 
+   __MPI_OnlyMasterEND
+         
+   902 FORMAT(" * General Information about the simulation     ",             /, &
+              " * Nr of trajectories:                          ", I10,        /, & 
+              " * Nr of replicas in the ring polymer dynamics: ", I10,        /, &
+              " * Temperature:                                 ", F10.1,1X,A, /, &
+              " * Frequency of the force between the beads     ", F10.4,1X,A, /   )
+
+   903 FORMAT(" * Relaxation variables                         ",             /, &
+              " * Equilibration time:                          ", F10.4,1X,A, /, & 
+              " * Equilibration time step:                     ", F10.4,1X,A, /, & 
+              " * Equilibration print step:                    ", F10.4,1X,A, /, & 
+              " * Langevin relaxation time of the system       ", F10.4,1X,A, /   ) 
+
+   904 FORMAT(" * Microcanonica propagation variables          ",             /, &
+              " * Propagation time:                            ", F10.4,1X,A, /, & 
+              " * Propagation time step:                       ", F10.4,1X,A, /, & 
+              " * Propagation print step:                      ", F10.4,1X,A, /   )
    
    !*************************************************************
    !         SETUP SECTION 
    !*************************************************************
 
+#if defined(WITH_MPI)
    ! >>> SEND DATA TO SLAVES
-   ! >>> DEFINE SET OF INDICES of iTraj TO RUN ON EACH SLAVE
+   CALL SyncroDataAcrossNodes
+#endif
    
+   ! Setup data and allocate memory
    CALL Setup( )
 
-   allocate( my_traj(NrTrajs) )  
-
-   DO jj=1, NrTrajs
-         my_traj(jj) = MOD(jj,__MPI_TotalNrOfProcs)
-	 __MPI_OnlyMasterBEGIN  print*,'jj',jj, 'my_traj', my_traj(jj) __MPI_OnlyMasterEND
+#if defined(WITH_MPI)
+   ! Define et of Indices of iTraj to run on each slave
+   allocate( NodeOfTraj(NrTrajs), NrOfTrajPerNode(0:__MPI_TotalNrOfProcs-1) )  
+   DO iTraj = 1, NrTrajs
+         NodeOfTraj(iTraj) = MOD(iTraj,__MPI_TotalNrOfProcs)
    END DO
+   ! Compute the number of trajectories that are executed by each node
+   DO iNode = 0, __MPI_TotalNrOfProcs-1
+      NrOfTrajPerNode(iNode) = 0
+      DO iTraj = 1, NrTrajs 
+         IF ( NodeOfTraj(iTraj) == iNode ) NrOfTrajPerNode(iNode) = NrOfTrajPerNode(iNode) + 1 
+      END DO
+   END DO
+#endif
 
+   ! Print info on trajectory parallelization 
+   __MPI_OnlyMasterBEGIN
+   WRITE(*,"(A,A,A)")  " Running ", TRIM(NumberToString(NrTrajs)), " trajectories ... "
+#if defined(WITH_MPI)
+   DO iNode = 0, __MPI_TotalNrOfProcs-1
+      WRITE(*,"(A,A,A,A)")     " Trajectories on node # ", TRIM(NumberToString(iNode)),   &
+                                 " : ",  TRIM(NumberToString(NrOfTrajPerNode(iNode)))
+   END DO
+#endif
+   __MPI_OnlyMasterEND
 !    CALL CheckForces( )
 
    !*************************************************************
    !         RUN SECTION 
    !*************************************************************
 
-   __MPI_OnlyMasterBEGIN
-   PRINT "(A,I5,A)"," Running ", NrTrajs, " trajectories ... "
-   __MPI_OnlyMasterEND
-
-   LogUnit = __MPI_CurrentNrOfProc+10
-   OPEN(UNIT= LogUnit, FILE='OutputProc'//trim(rank)//'.log')
-
    DO iTraj = 1, NrTrajs
 
-      IF ( my_traj(iTraj) == __MPI_CurrentNrOfProc ) then
+#if defined(WITH_MPI)
+      IF ( NodeOfTraj(iTraj) == __MPI_CurrentNrOfProc ) then
+#endif
 
-	 WRITE(LogUnit, "(2/,A)") "***************************************************"
-	 WRITE(LogUnit, "(A,I4)") "            Trajectory Nr. ", iTraj
-	 WRITE(LogUnit, "(A,/)" ) "***************************************************"
+         ! Store internal state of the random number generator at the beginning of the traj
+         OutputSet0 = GetInternalState( RandomNr )
+      
+         ! Initialize coordinates of the trajectory
+         CALL InitializeTrajectory()
 
-	 CALL InitializeTrajectory()
+         ! Evolve trajectory: equilbration and then microcanonical dynamics
+         CALL Thermalization( )
+         CALL DynamicsRun( )
 
-	 CALL Thermalization( )
-	 CALL DynamicsRun( )
+         ! Print to standard output info about the trajectory
+         WRITE(*, "(2/,A)") "***************************************************"
+         WRITE(*, "(A,A)")  "            Trajectory Nr. ", TRIM(NumberToString(iTraj))
+         WRITE(*, "(A,A)")  "         propagated by node # ", TRIM(NumberToString(NodeOfTraj(iTraj)))
+         WRITE(*, "(A,/)" ) "***************************************************"
+         WRITE(*, "(A)") " RNG internal state: " // TRIM(NumberToString(OutputSet0(1))) // " " // &
+                                                         TRIM(NumberToString(OutputSet0(2)))
+         IF ( NBeads > 1 ) THEN
+            WRITE(*,"(/,A)") " Propagating system in the canonical ensamble with PILE ... " 
+         ELSE
+            WRITE(*,"(/,A)") " Propagating system in the canonical ensamble with symplectic propagator ... " 
+         END IF
+         WRITE(*,"(A)") " Thermalization completed! "
+         WRITE(*,600) OutputSet1(1)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet1(2)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet1(3)*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+         WRITE(*,"(/,A)") " Propagating system in the microcanonical ensamble... " 
+         WRITE(*,601) OutputSet2(1)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet2(2)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet2(3)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet2(4)*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+         WRITE(*,"(A)") " Time propagation completed! "
+         WRITE(*,602) OutputSet3(1)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet3(2)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet3(3)*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
+                      OutputSet3(4)*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+         WRITE(*,"(A)") " "
 
+#if defined(WITH_MPI)
       END IF
-
+#endif
+      
    END DO
-
-   CLOSE( LogUnit )
 
    !*************************************************************
    !         AVERAGES AND OUTPUT SECTION 
@@ -241,6 +315,25 @@ PROGRAM PolyOnTheFly
    CALL MyMPI_Finalize()
 #endif
 
+      600 FORMAT (/, " Average values of the thermalization dynamics "   ,/,  &
+                     " * Kinetic Energy "                                ,/,  &
+                     "     average                          ",1F10.4,1X,A,/,  &
+                     "     standard deviation               ",1F10.4,1X,A,/,  &
+                     " * Temperature (time average)         ",1F10.4,1X,A,/) 
+                     
+      601 FORMAT (/, " Initial condition of the MD trajectory        "   ,/,  &
+                     " (for RP, full ring polymer hamiltonian)       "   ,/,  &
+                     " * Kinetic Energy                     ",1F10.4,1X,A,/,  &
+                     " * Potential Energy                   ",1F10.4,1X,A,/,  &
+                     " * Total Energy                       ",1F10.4,1X,A,/,  &
+                     " * Istantaneous Temperature           ",1F10.4,1X,A,/) 
+
+      602 FORMAT (/, " Final condition of the MD trajectory          "   ,/,  &
+                     " (for RP, full ring polymer hamiltonian)       "   ,/,  &
+                     " * Kinetic Energy                     ",1F10.4,1X,A,/,  &
+                     " * Potential Energy                   ",1F10.4,1X,A,/,  &
+                     " * Total Energy                       ",1F10.4,1X,A,/,  &
+                     " * Istantaneous Temperature           ",1F10.4,1X,A,/)                      
   
 !============================================================================================
                                   CONTAINS
@@ -256,20 +349,12 @@ PROGRAM PolyOnTheFly
       IMPLICIT NONE
 
       ! read input units ( or set them to default value )
-      ! ********* DEFAULT VALUES *********** !
-      !      distance    - Angstrom          !
-      !      energy      - electronVolt      !
-      !      mass        - AMU               !
-      !      time        - femtosecond       !
-      !      temperature - Kelvin            !
-      !      frequency   - cm-1              !
-      ! *************************************!
-      CALL SetFieldFromInput( InputData, "InputLength", InputLength,  1 )
-      CALL SetFieldFromInput( InputData, "InputEnergy", InputEnergy,  3 )
-      CALL SetFieldFromInput( InputData, "InputMass",   InputMass,    8 )
-      CALL SetFieldFromInput( InputData, "InputTime",   InputTime,   13 )
-      CALL SetFieldFromInput( InputData, "InputTemp",   InputTemp,   16 )
-      CALL SetFieldFromInput( InputData, "InputFreq",   InputFreq,   18 )
+      CALL SetFieldFromInput( InputData, "InputLength", InputLength,  UNITS_ANGSTROM )
+      CALL SetFieldFromInput( InputData, "InputEnergy", InputEnergy,  UNITS_EV       )
+      CALL SetFieldFromInput( InputData, "InputMass",   InputMass,    UNITS_AMU      )
+      CALL SetFieldFromInput( InputData, "InputTime",   InputTime,    UNITS_FEMTOS   )
+      CALL SetFieldFromInput( InputData, "InputTemp",   InputTemp,    UNITS_KELVIN   )
+      CALL SetFieldFromInput( InputData, "InputFreq",   InputFreq,    UNITS_CMMINUS1 )
    
       ! READ THE INFORMATION ABOUT THE SYSTEM
    
@@ -337,6 +422,32 @@ PROGRAM PolyOnTheFly
 
    ! ===================================================================================================
 
+   SUBROUTINE SyncroDataAcrossNodes( )
+      IMPLICIT NONE
+
+      ! Data read from input file
+      CALL MyMPI_BroadcastToSlaves( NBeads )
+      CALL MyMPI_BroadcastToSlaves( Temperature )
+      CALL MyMPI_BroadcastToSlaves( NrTrajs )
+      CALL MyMPI_BroadcastToSlaves( PrintTimeStep )
+      CALL MyMPI_BroadcastToSlaves( EquilTotalTime )
+      CALL MyMPI_BroadcastToSlaves( LangevinGamma )
+      CALL MyMPI_BroadcastToSlaves( EquilTimeStep )
+      CALL MyMPI_BroadcastToSlaves( TimeStep )
+      CALL MyMPI_BroadcastToSlaves( DynamicsTotalTime )
+      
+      ! Data trivially computed from input data 
+      CALL MyMPI_BroadcastToSlaves( NrSteps )
+      CALL MyMPI_BroadcastToSlaves( EquilNrSteps )
+      CALL MyMPI_BroadcastToSlaves( PrintStepInterval )
+      CALL MyMPI_BroadcastToSlaves( EquilPrintStepInterval )
+      CALL MyMPI_BroadcastToSlaves( BeadsFrequency )
+      CALL MyMPI_BroadcastToSlaves( BeadsForceConst )
+          
+   END SUBROUTINE SyncroDataAcrossNodes
+
+   ! ===================================================================================================
+
    SUBROUTINE Setup( )
       IMPLICIT NONE
       REAL :: WellDepth, EquilDist
@@ -367,8 +478,7 @@ PROGRAM PolyOnTheFly
       ! Set transform from ring coordinates to normal modes
       CALL SetupFFT( RingNormalModes, NBeads ) 
 
-      ! Set variables for EOM integration of the system only in the microcanonical ensamble 
-      ! this will be done in a serial way, so no replicated data
+      ! Set variables for EOM integration of the system in the canonical ensamble with Langevin dynamics
       CALL EvolutionSetup( InitialConditions, NDim, MassVector, EquilTimeStep )
       ! Set ring polymer molecular dynamics parameter
       IF ( NBeads > 1 ) CALL SetupRingPolymer( InitialConditions, NBeads, BeadsFrequency ) 
@@ -401,7 +511,6 @@ PROGRAM PolyOnTheFly
 !          X(iCoord) = X(iCoord) + UniformRandomNr( RandomNr ) * 0.5
 !       END DO
 
-      ! >>> ONLY MAIN SHOULD EXECUTE THE FOLLOWING CALL
       CALL SingleTrajectoryOutput( SETUP_OUTPUT )
 
    END SUBROUTINE InitializeTrajectory
@@ -419,10 +528,8 @@ PROGRAM PolyOnTheFly
 
       ! Initialize forces
       IF ( NBeads > 1 ) THEN
-         WRITE(LogUnit,"(/,A)") " Propagating system in the canonical ensamble with PILE ... " 
          CALL EOM_RPMSymplectic( InitialConditions, X, V, A, GetPotential, PotEnergy, RandomNr, 1 )
       ELSE
-         WRITE(LogUnit,"(/,A)") " Propagating system in the canonical ensamble with symplectic propagator ... " 
          PotEnergy = GetPotential( X, A )
          A(:) = A(:) / MassVector(:)
       END IF
@@ -485,23 +592,14 @@ PROGRAM PolyOnTheFly
       
       END DO
       
-      WRITE(LogUnit,"(A)") " Thermalization completed! "
-
       KinTimeAverage = KinTimeAverage / kStep
       KinTimeStDev = SQRT( KinTimeStDev / kStep - KinTimeAverage**2 )
 
-      WRITE(LogUnit,600) KinTimeAverage*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                 KinTimeStDev*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                 2.0*KinTimeAverage/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+      OutputSet1(:) = (/ KinTimeAverage, KinTimeStDev, 2.0*KinTimeAverage/NDim/NBeads /)
 
       ! Write to the output file a separation between equilibration and dynamics
       CALL SingleTrajectoryOutput( DIVIDE_EQ_DYN )
 
-      600 FORMAT (/, " Average values of the thermalization dynamics "   ,/,  &
-                     " * Kinetic Energy "                                ,/,  &
-                     "     average                          ",1F10.4,1X,A,/,  &
-                     "     standard deviation               ",1F10.4,1X,A,/,  &
-                     " * Temperature (time average)         ",1F10.4,1X,A,/) 
 
    END SUBROUTINE Thermalization
 
@@ -510,8 +608,6 @@ PROGRAM PolyOnTheFly
    SUBROUTINE DynamicsRun( )
       IMPLICIT NONE
       INTEGER :: iStep
-
-      WRITE(LogUnit,"(/,A)") " Propagating system in the microcanonical ensamble... " 
 
       ! Bring the atomic coordinates to the first unit cell
       CALL PBC_BringToFirstCell( X, NBeads )
@@ -564,17 +660,12 @@ PROGRAM PolyOnTheFly
             CentroidPos = CentroidCoord( X )
             CentroidVel = CentroidCoord( V )               
 
+            ! For the first step, store initial energy values to print trajectory info to st out
             IF ( iStep == 0 ) THEN
                IF ( NBeads > 1 ) THEN
-                  WRITE(LogUnit,601) RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                           RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                           RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                           2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+                  OutputSet2(:) = (/ RPKinEnergy, RPPotEnergy, RPTotEnergy, 2.0*RPKinEnergy/NDim/NBeads /)
                ELSE
-                  WRITE(LogUnit,601) KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                           PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                           TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                           2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+                  OutputSet2(:) = (/ KinEnergy, PotEnergy, TotEnergy, 2.0*KinEnergy/NDim /)
                END IF
             END IF
 
@@ -588,36 +679,15 @@ PROGRAM PolyOnTheFly
 
       END DO
 
-      WRITE(LogUnit,"(A)") " Time propagation completed! "
-
+      ! Store final energy values to print trajectory info to st out
       IF ( NBeads > 1 ) THEN
-         WRITE(LogUnit,602) RPKinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                    RPPotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                    RPTotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits),  &
-                    2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+         OutputSet3(:) = (/ RPKinEnergy, RPPotEnergy, RPTotEnergy, 2.0*RPKinEnergy/NDim/NBeads /)
       ELSE
-         WRITE(LogUnit,602) KinEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                    PotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                    TotEnergy*EnergyConversion(InternalUnits, InputUnits), EnergyUnit(InputUnits), &
-                    2.0*KinEnergy/NDim*TemperatureConversion(InternalUnits, InputUnits), TemperUnit(InputUnits) 
+         OutputSet3(:) = (/ KinEnergy, PotEnergy, TotEnergy, 2.0*KinEnergy/NDim /)
       END IF
 
       ! Close output file
       CALL SingleTrajectoryOutput( CLOSE_OUTPUT )
-
-      601 FORMAT (/, " Initial condition of the MD trajectory        "   ,/,  &
-                     " (for RP, full ring polymer hamiltonian)       "   ,/,  &
-                     " * Kinetic Energy                     ",1F10.4,1X,A,/,  &
-                     " * Potential Energy                   ",1F10.4,1X,A,/,  &
-                     " * Total Energy                       ",1F10.4,1X,A,/,  &
-                     " * Istantaneous Temperature           ",1F10.4,1X,A,/) 
-
-      602 FORMAT (/, " Final condition of the MD trajectory          "   ,/,  &
-                     " (for RP, full ring polymer hamiltonian)       "   ,/,  &
-                     " * Kinetic Energy                     ",1F10.4,1X,A,/,  &
-                     " * Potential Energy                   ",1F10.4,1X,A,/,  &
-                     " * Total Energy                       ",1F10.4,1X,A,/,  &
-                     " * Istantaneous Temperature           ",1F10.4,1X,A,/) 
 
    END SUBROUTINE DynamicsRun
 
