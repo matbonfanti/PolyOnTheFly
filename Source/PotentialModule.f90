@@ -15,12 +15,17 @@
 !***************************************************************************************
 !
 !>  \par Updates
-!>  \arg 
+!>  \arg 8 November 2014: input and setup are now separated, data synchronization
+!>                        for MPI application has been added
+!>  \arg 8 November 2014: SetNearTranslations has been moved to PBC Module,
+!>                        new subs to query the PBC defined in the potential module
 !
-!>  \todo          \arg separate input subroutine from setup subroutine
-!>                 \arg logging of input and setup subroutines
+!>  \todo          \arg logging of input and setup subroutines
 !>                 \arg SIESTA: run calculation in different dir
 !>                 \arg SIESTA: improve definition of input directives
+!>                 \arg define initial velocities according to maxwell-boltzmann
+!>                 \arg include minimization of the potential and hessian computation
+!>                 \arg move atomic dictionaries to another module
 !>                 
 !***************************************************************************************
 MODULE PotentialModule
@@ -33,9 +38,20 @@ MODULE PotentialModule
 
    PRIVATE
 
-   PUBLIC :: SetupPotential, GetPotential, DisposePotential
-   PUBLIC :: GetUnitCellDimensions, GetInitialPositions, GetAtomsNumber, GetMasses
+   ! Setup subroutines
+   PUBLIC  ::  InputPotential, SyncroPotentialDataAcrossNodes, SetupPotential
+   ! Queries on the periodic boundary conditions
+   PUBLIC  ::  PotentialIsPeriodic, GetPotentialUnitCell, GetUnitCellDimensions
+   ! Queries on the number of degrees of freedom
+   PUBLIC  ::  GetAtomsNumber, GetDoFNumber, GetMasses
+   ! Compute initial positions for the system in agreement with the defined potential
+   PUBLIC  ::  GetInitialPositions
+   ! Get the potential and the forces at given coordinates
+   PUBLIC  ::  GetPotential
+   ! Dispose subroutine
+   PUBLIC  ::  DisposePotential
 
+   
    !> \name SYSTEM ID
    !> Integers number identifying the kind of potential adopted
    !> @{
@@ -52,34 +68,43 @@ MODULE PotentialModule
 
    !> Number of atoms of the system
    INTEGER, SAVE :: AtomNo
+   !> Number of degrees of freedom of the system
+   INTEGER, SAVE :: DoFNo
 
    !> Periodic boundary conditions Flag
    LOGICAL, SAVE :: PBC = .FALSE.
-
-   !> Size for cubic cells
-   REAL, SAVE :: BoxSize
    !> Vectors of the unit cell
-   REAL, DIMENSION(3,3), SAVE :: UnitVectors
+   REAL, DIMENSION(3,3), SAVE :: UnitVectors = RESHAPE( (/1.E+100, 0.0, 0.0 , 0.0, 1.E+100, 0.0, 0.0, 0.0, 1.E+100/), (/3,3/) )
 
-   !> Label of the system for SIESTA
-   CHARACTER(100) :: SystemLabel
-   !> Atomic numbers of the atoms 
-   INTEGER, DIMENSION(:), SAVE, ALLOCATABLE  :: AtomicNumbers
-     !> Positions of the atoms
-   REAL, DIMENSION(:,:), SAVE, ALLOCATABLE :: AtomicPositions
-
-   !> Cutoff distance for a pair potential
-   REAL, SAVE   :: CutOff = 100.0
-   !> How many neighbour atoms are included in the pair potential summation
-   INTEGER, SAVE :: NearPeriodicImages = 0
-   !> Lattice translations of the near neighbour cells
-   REAL, DIMENSION(:,:), ALLOCATABLE :: NearTranslations
-
+   !> \name PAIR POTENTIALS 
+   !> Parameters for a generic pair potential 
+   !> @{
+   REAL, SAVE                      :: CutOff = 100.0   !< Cutoff distance for a pair potential
+   TYPE(PBC_NearCellTranslations)  :: NeighbourCells   !< Translations to the neighbour cells within the cutoff radius 
+   !> @}
+   
    !> \name LENNARD-JONES POTENTIAL PARAMETERS
    !> Parameters of the Lennard-Jones pair potential
    !> @{
-   REAL, SAVE :: LJ_WellDepth = 1.0       !< Potential well depth (energy)
-   REAL, SAVE :: LJ_EquilDist = 1.0       !< Potential equilibrium distance (lenght)
+   REAL, SAVE :: LJ_WellDepth = 1.0                            !< Potential well depth (energy)
+   REAL, SAVE :: LJ_EquilDist = 1.0                            !< Potential equilibrium distance (length)
+   !> @}
+   
+   !> \name MORSE POTENTIAL PARAMETERS
+   !> Parameters of the Morse pair potential
+   !> @{
+   REAL, SAVE :: MorseDe        = 1.0                            !< Potential well depth (energy)
+   REAL, SAVE :: MorseEquilDist = 1.0                            !< Potential equilibrium distance (length)
+   REAL, SAVE :: MorseAlpha     = 1.0                            !< Potential curvature (1/length)
+   !> @}
+
+   !> \name SIESTA ON-THE-FLY FORCES
+   !> Variables for SIESTA
+   !> @{
+   CHARACTER(100), SAVE                     :: SystemLabel     !< Label of the system for SIESTA
+   INTEGER, DIMENSION(:), SAVE, ALLOCATABLE :: AtomicNumbers   !< Atomic numbers of the atoms 
+   REAL, DIMENSION(:,:), SAVE, ALLOCATABLE  :: AtomicPositions !< Positions of the atoms
+   TYPE(Units), SAVE                        :: SIESTAUnits     !< Units definition for SIESTA
    !> @}
 
 
@@ -87,155 +112,113 @@ MODULE PotentialModule
                                        CONTAINS
 !============================================================================================
 
-   SUBROUTINE SetupPotential( PotentialFileName )
+
+   !*******************************************************************************
+   !                               InputPotential
+   !*******************************************************************************
+   !>  Read from input file the variables to define the potential used in the
+   !>  dynamical simulation, process and convert them to internal units.
+   !>  Input file and unit definitions are given to the subroutines as input
+   !>  arguments, via the specific data type TYPE(InputFile) [module InputField]
+   !>  and TYPE(Units) [module UnitConversion]. Then the input file definition
+   !>  and units definition are elsewhere, and they can be the very same of the 
+   !>  other part of the input mechanism.
+   !> 
+   !> @param    PotentialData   InputFile datatype - I/O unit for reading
+   !> @param    PotentialUnits  Units datatype - conversion factors
+   !*******************************************************************************
+
+   SUBROUTINE InputPotential( PotentialData, PotentialUnits )
       IMPLICIT NONE
-      CHARACTER(*), INTENT(IN)   :: PotentialFileName
-
+      TYPE(InputFile)               :: PotentialData
+      TYPE (Units), INTENT(IN)      :: PotentialUnits
+      
       CHARACTER(100)    :: ErrorMsg, String
-      TYPE(InputFile)   :: PotentialData
-      INTEGER           :: InputLength, InputEnergy, InputMass       ! Units of input data, defined from the input file
       INTEGER           :: iAtom
-      LOGICAL           :: FileExists
-
-      ! exit if module is setup
+      
+      ! If the potential has been already set up, print warning and skip the rest of the subroutine
+      CALL WARN( PotentialModuleIsSetup, " InputPotential: Potential module has been already set up " ) 
       IF ( PotentialModuleIsSetup ) RETURN
-
-      __MPI_OnlyMasterBEGIN
-      ! Open potential input file
-      CALL OpenFile( PotentialData, PotentialFileName )
-
-      ! Read input unit
-      CALL SetFieldFromInput( PotentialData, "InputLength", InputLength,  1 )
-      CALL SetFieldFromInput( PotentialData, "InputEnergy", InputEnergy,  3 )
-      CALL SetFieldFromInput( PotentialData, "InputMass", InputMass,  8 )
-
-      ! Read system number
+      
+      ! Read system id number
       CALL SetFieldFromInput( PotentialData, "SystemNumber", SystemNumber )
-      __MPI_OnlyMasterEND
-
-      CALL MyMPI_BroadcastToSlaves( InputLength ) 
-      CALL MyMPI_BroadcastToSlaves( InputEnergy ) 
-      CALL MyMPI_BroadcastToSlaves( InputMass ) 
-      CALL MyMPI_BroadcastToSlaves( SystemNumber ) 
-
+      
       ! Check if the potential id number is valid
       WRITE(ErrorMsg,*) " PotentialModule.SetupPotential : no potential corresponds to Id = ", SystemNumber
       CALL ERROR ( .NOT. PotentialIdExists(SystemNumber),  ErrorMsg )
 
-      ! Setup conversion factors from potential to internal units
-      CALL Initialize_UnitConversion( PotentialUnits, InputLength, InputEnergy, InputMass, 11, 12, 15, 17 )
-
-      ! Depending on system number, different setup operations
+      ! GENERAL VARIABLES: no of atoms, PBC ...
+      
+      ! number of particles
+      CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
+      
+      ! periodic system and size of the simulation cell
+      CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
+      IF ( PBC ) THEN
+         CALL SetFieldFromInput( PotentialData, "AUnitVector", UnitVectors(:,1) )
+         CALL SetFieldFromInput( PotentialData, "BUnitVector", UnitVectors(:,2) )
+         CALL SetFieldFromInput( PotentialData, "CUnitVector", UnitVectors(:,3) )
+         UnitVectors = UnitVectors * LengthConversion( PotentialUnits, InternalUnits )
+      END IF
+      
+      ! SYSTEM SPECIFIC VARIABLES 
+      
       SELECT CASE( SystemNumber )
 
          ! Gas of free particles
          CASE( FREE_PARTICLES )
-
-            ! number of particles
-            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
-            ! periodic system
-            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
-            ! Size of the simulation box
-            IF ( PBC ) THEN
-               CALL SetFieldFromInput( PotentialData, "BoxSize", BoxSize )
-               CALL PBC_Setup( (/ BoxSize, 0.0, 0.0 /), (/ 0.0, BoxSize, 0.0 /), (/ 0.0, 0.0, BoxSize /) )
-            END IF
-
-         ! Gas of LJ particles
+         
+            ! -------------------------------|
+            ! NO ADDITIONAL VARIABLE TO READ |
+            ! -------------------------------|
+            
+         ! Gas of Lennard-Jones particles
          CASE( LJ_PAIR_POTENTIAL )
-
-            __MPI_OnlyMasterBEGIN
-            ! number of particles
-            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
-            ! periodic system
-            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
-            ! Size of the simulation box
-            IF ( PBC ) THEN
-               CALL SetFieldFromInput( PotentialData, "BoxSize", BoxSize )
-            END IF
 
             ! Store the pair potential parameters
             CALL SetFieldFromInput( PotentialData, "WellDepth", LJ_WellDepth )
             CALL SetFieldFromInput( PotentialData, "EquilDist", LJ_EquilDist )
+            ! Set the cutoff distance of the pair potential
+            CALL SetFieldFromInput( PotentialData, "CutOff", CutOff, LJ_EquilDist*6.0 )
+
+            ! Convert them to internal units
             LJ_WellDepth = LJ_WellDepth * EnergyConversion( PotentialUnits, InternalUnits )
             LJ_EquilDist = LJ_EquilDist * LengthConversion( PotentialUnits, InternalUnits )
-
-            ! Set the cutoff distance of the pair potential
-            CALL SetFieldFromInput(PotentialData,"CutOff",CutOff,LJ_EquilDist*LengthConversion(InternalUnits,PotentialUnits)*6.0)
-            CutOff = CutOff * LengthConversion( PotentialUnits, InternalUnits )
-            __MPI_OnlyMasterEND
-
-            CALL MyMPI_BroadcastToSlaves( AtomNo )
-            CALL MyMPI_BroadcastToSlaves( PBC )
-            CALL MyMPI_BroadcastToSlaves( BoxSize )
-            CALL MyMPI_BroadcastToSlaves( LJ_WellDepth )
-            CALL MyMPI_BroadcastToSlaves( LJ_EquilDist )
-            CALL MyMPI_BroadcastToSlaves( CutOff )
-
-            IF ( PBC ) THEN
-              CALL PBC_Setup( (/ BoxSize, 0.0, 0.0 /), (/ 0.0, BoxSize, 0.0 /), (/ 0.0, 0.0, BoxSize /) )
-            END IF
-
-            ! Check how many image atoms should be included in the pair potential summation
-            CALL SetNearTranslations( )
-
-         ! Gas of LJ particles
+            CutOff       = CutOff       * LengthConversion( PotentialUnits, InternalUnits )
+ 
+         ! SIESTA on-the-fly computation of the forces
          CASE( SIESTA_ONTHEFLY )
 
-            ! SystemLabel
-            WRITE(SystemLabel,"(A,I0.3)") "PolyOnTheFly", 0
-            ! HERE THE NUMBER ZERO SHOULD BE THE SLAVE ID NUMBER!
-
-            ! number of particles
-            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
+            ! Allocate memory to store initial definition of atomic info
             ALLOCATE( AtomicNumbers(AtomNo), AtomicPositions(3,AtomNo) )
-
-            ! periodic system
-            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
-            ! Vectors of the unit cell
-            IF ( PBC ) THEN
-               CALL SetFieldFromInput( PotentialData, "AUnitVector", UnitVectors(:,1) )
-               CALL SetFieldFromInput( PotentialData, "BUnitVector", UnitVectors(:,2) )
-               CALL SetFieldFromInput( PotentialData, "CUnitVector", UnitVectors(:,3) )
-               UnitVectors = UnitVectors * LengthConversion( PotentialUnits, InternalUnits )
-               CALL PBC_Setup( UnitVectors(:,1), UnitVectors(:,2), UnitVectors(:,3) )
-            END IF
 
             ! Read labels of the atoms 
             CALL SetFieldFromInput( PotentialData, "AtomicNumbers", AtomicNumbers )
-            ! Read Atomic positions
+            
+            ! Read Atomic positions and convert them to internal units
             DO iAtom = 1, AtomNo
                WRITE(String,"(A,I0.3)") "Atom",iAtom
                CALL SetFieldFromInput( PotentialData, trim(adjustl(String)), AtomicPositions(:,iAtom) )
             END DO
             AtomicPositions = AtomicPositions * LengthConversion( PotentialUnits, InternalUnits )
 
-            ! Check if pseudopotentials are present
-            DO iAtom = 1, AtomNo
-               INQUIRE(FILE=TRIM(AtomicLabel(AtomicNumbers(iAtom)))//".psf" , EXIST=FileExists)
-               CALL ERROR( .NOT. FileExists, " SetupPotential: missing pseudopotential "//TRIM(AtomicLabel(iAtom))//".psf" )
-            END DO
-
-            CALL WriteSIESTAInput()
-
-            ! Initialize SIESTA input units
-             call siesta_units( 'Ang', 'eV' )
-            ! Initialize siesta processes
-            CALL siesta_launch( TRIM(ADJUSTL(SystemLabel)), 1 )
-
       END SELECT
+      
+   END SUBROUTINE InputPotential
 
-      __MPI_OnlyMasterBEGIN
-      ! close input file
-      CALL CloseFile( PotentialData )
-      __MPI_OnlyMasterEND
-
-      ! Module is now ready
-      PotentialModuleIsSetup = .TRUE.
-
-   END SUBROUTINE SetupPotential
-
+   
 !============================================================================================
+
+
+   !*******************************************************************************
+   !                               PotentialIdExists
+   !*******************************************************************************
+   !>  Check if the input integer number corresponds to a system potential
+   !>  definition which is coded in the current module. Should be updated 
+   !>  as well if an additional potential is included in the module
+   !> 
+   !> @param       IdNr            Integer number, possible system id
+   !*******************************************************************************
 
    LOGICAL FUNCTION PotentialIdExists( IdNr )
       IMPLICIT NONE
@@ -247,74 +230,255 @@ MODULE PotentialModule
 
    END FUNCTION PotentialIdExists
 
+   
 !============================================================================================
 
-   SUBROUTINE GetInitialPositions( X, RandomNr )
+
+   !*******************************************************************************
+   !                    SyncroPotentialDataAcrossNodes
+   !*******************************************************************************
+   !>  Syncronize potential data across all the nodes in a MPI run.
+   !>  Allocatable arrays may be allocated on the master node, while
+   !>  on the slaves they might be non allocated since the slaves where 
+   !>  idle during the input procedure. Pay attantion to allocation! 
+   !*******************************************************************************
+
+   SUBROUTINE SyncroPotentialDataAcrossNodes( )
       IMPLICIT NONE
-      REAL, DIMENSION(:), INTENT(OUT) :: X
-      TYPE(RNGInternalState)          :: RandomNr
-      INTEGER :: i, j
-      REAL :: MinDistance, Distance
-      REAL, DIMENSION(3) :: VecDist
-
-      ! Error if module not have been setup yet
-      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.InitialPositions : Module not Setup" )
-
-      ! Check dimension of subroutine argument
-      CALL ERROR( SIZE(X) /= 3*AtomNo,    " PotentialModule.InitialPositions : wrong dimension of coordinate array " )
-
-      ! Depending on system number, different initialization operations
+      INTEGER           :: iAtom
+      
+      ! If the potential has been already set up, print warning and skip the rest of the subroutine
+      CALL WARN( PotentialModuleIsSetup, " SyncroPotentialDataAcrossNodes: Potential module has been already set up " ) 
+      IF ( PotentialModuleIsSetup ) RETURN
+     
+      ! Syncro GENERAL VARIABLES that are relevant for all the systems
+      CALL MyMPI_BroadcastToSlaves( AtomNo )
+      CALL MyMPI_BroadcastToSlaves( PBC )
+      IF ( PBC ) THEN
+         CALL MyMPI_BroadcastToSlaves( UnitVectors(:,1) )
+         CALL MyMPI_BroadcastToSlaves( UnitVectors(:,2) )
+         CALL MyMPI_BroadcastToSlaves( UnitVectors(:,3) )
+      END IF
+      
+      ! synchro SYSTEM SPECIFIC VARIABLES 
       SELECT CASE( SystemNumber )
 
-         CASE( FREE_PARTICLES, LJ_PAIR_POTENTIAL )
+         ! Gas of free particles
+         CASE( FREE_PARTICLES )
+         
+            ! --------------------------------------|
+            ! NO ADDITIONAL VARIABLE TO SYNCHRONIZE |
+            ! --------------------------------------|
+            
+         ! Gas of Lennard-Jones particles
+         CASE( LJ_PAIR_POTENTIAL )
 
-            X( 1 ) = UniformRandomNr( RandomNr ) * BoxSize
-            X( 2 ) = UniformRandomNr( RandomNr ) * BoxSize
-            X( 3 ) = UniformRandomNr( RandomNr ) * BoxSize
+            CALL MyMPI_BroadcastToSlaves( LJ_WellDepth )
+            CALL MyMPI_BroadcastToSlaves( LJ_EquilDist )
+            CALL MyMPI_BroadcastToSlaves( CutOff )
 
-            DO i = 2, AtomNo
-               X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * BoxSize
-               X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * BoxSize
-               X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * BoxSize
-
-               DO
-                  MinDistance = 1000.0
-                  DO j = 1, i-1
-                     VecDist = X( (i-1)*3+1 : i*3 ) - X( (j-1)*3+1 : j*3 )
-                     Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
-                     MinDistance = MIN( MinDistance, Distance )
-                  END DO
-                  IF  ( MinDistance > 5.0 ) EXIT
-                  X( (i-1)*3+1 ) = UniformRandomNr( RandomNr ) * BoxSize
-                  X( (i-1)*3+2 ) = UniformRandomNr( RandomNr ) * BoxSize
-                  X( (i-1)*3+3 ) = UniformRandomNr( RandomNr ) * BoxSize
-               END DO
-            END DO
-
+         ! SIESTA on-the-fly computation of the forces
          CASE( SIESTA_ONTHEFLY )
 
-            DO i = 1, AtomNo
-               X( (i-1)*3+1 : (i-1)*3+3 ) = AtomicPositions( :,i )
+            ! Allocate memory to store initial definition of atomic info
+            IF ( .NOT. ALLOCATED(AtomicNumbers) )    ALLOCATE( AtomicNumbers(AtomNo) )
+            IF ( .NOT. ALLOCATED(AtomicPositions) )  ALLOCATE( AtomicPositions(3,AtomNo) )
+
+            ! Synchro atomic labes and atomic positions
+            CALL MyMPI_BroadcastToSlaves( AtomicNumbers )
+            DO iAtom = 1, AtomNo
+               CALL MyMPI_BroadcastToSlaves( AtomicPositions(:,iAtom) )
             END DO
 
       END SELECT
+      
+   END SUBROUTINE SyncroPotentialDataAcrossNodes
 
-   END SUBROUTINE GetInitialPositions
 
 !============================================================================================
+
+   
+   !*******************************************************************************
+   !                    SetupPotential
+   !*******************************************************************************
+   !>  Once data is read and synchronized on all nodes, setup data
+   !>  which is needed to compute the potential.
+   !>  E.g.: setup the communication interface between the code and 
+   !>  the external electronic structure program, define the variables 
+   !>  for pair potential summation, etc etc ...
+   !*******************************************************************************
+
+   SUBROUTINE SetupPotential(  )
+      IMPLICIT NONE
+      LOGICAL           :: FileExists
+      INTEGER           :: iAtom
+
+      ! exit if module is setup
+      CALL WARN( PotentialModuleIsSetup, " SetupPotential: Potential module has been already set up " ) 
+      IF ( PotentialModuleIsSetup ) RETURN
+
+      ! Depending on system number, different setup operations
+      SELECT CASE( SystemNumber )
+
+         ! Gas of free particles
+         CASE( FREE_PARTICLES )
+         
+            ! In a 3D gas each particle has 3 dof
+            DoFNo = 3 * AtomNo
+
+         ! Gas of Lennard-Jones particles
+         CASE( LJ_PAIR_POTENTIAL )
+
+            ! In a 3D gas each particle has 3 dof
+            DoFNo = 3 * AtomNo
+
+            ! Check how many image atoms should be included in the pair potential summation
+            CALL PBC_SetNearTranslations( NeighbourCells, CutOff )
+
+         ! SIESTA on-the-fly computation of the forces
+         CASE( SIESTA_ONTHEFLY )
+
+            ! In a 3D system, each particle has 3 dof
+            DoFNo = 3 * AtomNo
+
+            ! Set units for SIESTA
+            CALL Initialize_UnitConversion( SIESTAUnits, UNITS_ANGSTROM, UNITS_EV, UNITS_AMU, UNITS_DEGREE, UNITS_FEMTOS, &
+                                                         UNITS_KELVIN, UNITS_CMMINUS1 )
+
+            ! SystemLabel, defined according to the mpi id
+            WRITE(SystemLabel,"(A,I0.3)") "PolyOnTheFly", __MPI_CurrentNrOfProc
+
+            ! Check if pseudopotentials are present
+            DO iAtom = 1, AtomNo
+               INQUIRE(FILE=TRIM(AtomicLabel(AtomicNumbers(iAtom)))//".psf" , EXIST=FileExists)
+               CALL ERROR( .NOT. FileExists, " SetupPotential: missing pseudopotential "//TRIM(AtomicLabel(iAtom))//".psf" )
+            END DO
+
+            ! Write SIESTA input file
+            CALL WriteSIESTAInput()
+
+            ! Initialize SIESTA input units
+            call siesta_units( 'Ang', 'eV' )
+            ! Initialize siesta processes
+            CALL siesta_launch( TRIM(ADJUSTL(SystemLabel)), 1 )
+
+      END SELECT
+
+      ! Module is now ready
+      PotentialModuleIsSetup = .TRUE.
+
+   END SUBROUTINE SetupPotential
+
+
+!============================================================================================
+
+
+   !*******************************************************************************
+   !                    DisposePotential
+   !*******************************************************************************
+   !>  Deallocate memory and set status variable to false
+   !*******************************************************************************
+
+   SUBROUTINE DisposePotential(  )
+      IMPLICIT NONE
+
+      ! exit if module is not setup
+      IF ( .NOT. PotentialModuleIsSetup ) RETURN
+
+      ! Deallocate allocated memory
+      IF ( ALLOCATED(AtomicNumbers) )    DEALLOCATE( AtomicNumbers )
+      IF ( ALLOCATED(AtomicPositions) )  DEALLOCATE( AtomicPositions )
+      
+      ! Set status variable
+      PotentialModuleIsSetup = .FALSE.
+      
+   END SUBROUTINE DisposePotential
+
+   
+!============================================================================================
+
+
+   !*******************************************************************************
+   !             PotentialIsPeriodic and GetPotentialUnitCell
+   !*******************************************************************************
+   !>  Functions to query the PBC definitions within the potential subroutines.
+   !>  PotentialIsPeriodic gives a logical value, which is TRUE if PBC are defined.
+   !>  GetPotentialUnitCell gives the array with the unit cell definitions. A cubic 
+   !>  huge cell is given if PBC are not defined.
+   !>  GetUnitCellDimensions gives the unit cell as (|a|,|b|,|c|,alpha,beta,gamma)  
+   !*******************************************************************************
+
+   LOGICAL FUNCTION PotentialIsPeriodic(  )
+      IMPLICIT NONE
+
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.PotentialIsPeriodic : Module not Setup" )
+
+      PotentialIsPeriodic = PBC
+      
+   END FUNCTION PotentialIsPeriodic
+
+   FUNCTION GetPotentialUnitCell( )
+      IMPLICIT NONE
+      REAL, DIMENSION(3,3) :: GetPotentialUnitCell
+      
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetPotentialUnitCell : Module not Setup" )
+
+      GetPotentialUnitCell = UnitVectors
+      
+   END FUNCTION GetPotentialUnitCell
+
+   FUNCTION GetUnitCellDimensions( ) RESULT(UnitCell)
+      IMPLICIT NONE
+      REAL, DIMENSION(6) :: UnitCell
+
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetUnitCellDimensions : Module not Setup" )
+
+      UnitCell(1) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,1) ) )
+      UnitCell(2) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,2), UnitVectors(:,2) ) )
+      UnitCell(3) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,3), UnitVectors(:,3) ) )
+      UnitCell(4) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,2), UnitVectors(:,3) ) / UnitCell(2) / UnitCell(3) )
+      UnitCell(5) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,3) ) / UnitCell(1) / UnitCell(3) )
+      UnitCell(6) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,2) ) / UnitCell(1) / UnitCell(2) )
+      UnitCell(4:6) = UnitCell(4:6) 
+
+   END FUNCTION GetUnitCellDimensions
+
+   
+!============================================================================================
+
+
+   !*******************************************************************************
+   !             GetAtomsNumber, GetDoFNumber and GetMasses
+   !*******************************************************************************
+   !>  Functions to query the degrees of freedom defined in the system.
+   !>  GetAtomsNumber returns the number of particles of the system
+   !>  GetDoFNumber returns the number of DoF defined in the potential.
+   !>  GetMasses returns an array with the masses associated to the degrees of freedom.
+   !*******************************************************************************
 
    INTEGER FUNCTION GetAtomsNumber( )
       IMPLICIT NONE
 
       ! Error if module not have been setup yet
-      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetDOFNumber : Module not Setup" )
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetAtomsNumber : Module not Setup" )
 
       GetAtomsNumber = AtomNo
 
    END FUNCTION GetAtomsNumber
+   
+   INTEGER FUNCTION GetDoFNumber( )
+      IMPLICIT NONE
 
-!============================================================================================
+      ! Error if module not have been setup yet
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetDoFNumber : Module not Setup" )
 
+      GetDoFNumber = DoFNo
+
+   END FUNCTION GetDoFNumber
+   
    FUNCTION GetMasses( )
       IMPLICIT NONE
       REAL, DIMENSION( 3*AtomNo ) :: GetMasses
@@ -325,44 +489,114 @@ MODULE PotentialModule
 
       ! Depending on system number, different operations
       SELECT CASE( SystemNumber )
-
          CASE( FREE_PARTICLES, LJ_PAIR_POTENTIAL )
             GetMasses(:) = 1.0 * MassConversion(PotentialUnits, InternalUnits)
-
          CASE( SIESTA_ONTHEFLY )
             DO i = 1, AtomNo
                GetMasses( (i-1)*3+1 : (i-1)*3+3 ) = AtomicMass( AtomicNumbers(i) )
             END DO
-
+         CASE DEFAULT
+               CALL AbortWithError( " PotentialModule.GetMasses : undefined SystemNumber " )
       END SELECT
 
    END FUNCTION GetMasses
-
+   
+   
 !============================================================================================
 
-   FUNCTION GetUnitCellDimensions( ) RESULT(UnitCell)
+
+   !*******************************************************************************
+   !                    GetInitialPositions
+   !*******************************************************************************
+   !>  When the system potential is setup, use this subroutine to get the
+   !>  initial coordinates of the particles.
+   !> 
+   !> @param X         real array of size DoFNo, on exit has the initial coords
+   !> @param RandonNr  variable with the internal status of the RandomNumberGenerator
+   !*******************************************************************************
+
+   SUBROUTINE GetInitialPositions( X, RandomNr )
       IMPLICIT NONE
-      REAL, DIMENSION(6) :: UnitCell
+      REAL, DIMENSION(:), INTENT(OUT) :: X
+      TYPE(RNGInternalState)          :: RandomNr
+      INTEGER            :: i, j
+      REAL               :: MinDistance, Distance
+      REAL, DIMENSION(3) :: VecDist
 
       ! Error if module not have been setup yet
-      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetUnitCellDimensions : Module not Setup" )
+      CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.InitialPositions : Module not Setup" )
+      
+      ! Check dimension of subroutine argument
+      CALL ERROR( SIZE(X) /= DoFNo,    " PotentialModule.InitialPositions : wrong dimension of coordinate array " )
 
-      IF ( PBC ) THEN
-         UnitCell(1) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,1) ) )
-         UnitCell(2) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,2), UnitVectors(:,2) ) )
-         UnitCell(3) = SQRT( TheOneWithVectorDotVector( UnitVectors(:,3), UnitVectors(:,3) ) )
-         UnitCell(4) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,2), UnitVectors(:,3) ) / UnitCell(2) / UnitCell(3) )
-         UnitCell(5) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,3) ) / UnitCell(1) / UnitCell(3) )
-         UnitCell(6) = ACOS( TheOneWithVectorDotVector( UnitVectors(:,1), UnitVectors(:,2) ) / UnitCell(1) / UnitCell(2) )
-         UnitCell(4:6) = UnitCell(4:6) 
-      ELSE
-         UnitCell = (/ REAL(1.E+100), REAL(1.E+100), REAL(1.E+100), REAL(90.), REAL(90.), REAL(90.) /)
-      ENDIF
+      ! Depending on system number, different initialization operations
+      SELECT CASE( SystemNumber )
 
-   END FUNCTION GetUnitCellDimensions
+         ! For a 3D gas, distribute the initial coordinates randomly in the simulation box
+         CASE( FREE_PARTICLES, LJ_PAIR_POTENTIAL )
 
+            ! Set the coordinates of the first particle
+            X( 1 ) = UniformRandomNr( RandomNr )
+            X( 2 ) = UniformRandomNr( RandomNr )
+            X( 3 ) = UniformRandomNr( RandomNr )
+
+            ! Generate the following particles at a minimum distance from the others
+            DO i = 2, AtomNo
+               X( (i-1)*3+1 ) = UniformRandomNr( RandomNr )
+               X( (i-1)*3+2 ) = UniformRandomNr( RandomNr )
+               X( (i-1)*3+3 ) = UniformRandomNr( RandomNr )
+
+               DO
+                  ! Compute the minimum distance between each couples of particles
+                  MinDistance = 1000.0
+                  DO j = 1, i-1
+                     VecDist = X( (i-1)*3+1 : i*3 ) - X( (j-1)*3+1 : j*3 )
+                     Distance = SQRT( TheOneWithVectorDotVector( VecDist, VecDist ) )
+                     MinDistance = MIN( MinDistance, Distance )
+                  END DO
+                  
+                  ! Exit from the cycle if all the particles have a minimum distance of 2% (in internal coords)
+                  IF  ( MinDistance > 0.02 ) EXIT
+                  
+                  ! Otherwise, generate new coordinates for the current particle
+                  X( (i-1)*3+1 ) = UniformRandomNr( RandomNr )
+                  X( (i-1)*3+2 ) = UniformRandomNr( RandomNr )
+                  X( (i-1)*3+3 ) = UniformRandomNr( RandomNr )
+               END DO
+            END DO
+            
+            ! Transform internal coordinates to cartesian coordinates
+            DO i = 1, AtomNo
+               X( (i-1)*3+1:(i-1)*3+3 ) =  TheOneWithMatrixVectorProduct( UnitVectors ,  X( (i-1)*3+1:(i-1)*3+3 ) )
+            END DO
+
+         ! For SIESTA, use initial coordinates defined from input file
+         CASE( SIESTA_ONTHEFLY )
+
+            DO i = 1, AtomNo
+               X( (i-1)*3+1 : (i-1)*3+3 ) = AtomicPositions( :,i )
+            END DO
+
+      END SELECT
+
+   END SUBROUTINE GetInitialPositions
+
+   
 !============================================================================================
 
+
+   !*******************************************************************************
+   !                    GetPotential
+   !*******************************************************************************
+   !>  Compute potential and forces at given particle coordinates using the
+   !>  potential defined. The function directly returns the potential value
+   !>  while the forces are given as function argument.
+   !> 
+   !> @param   X       Array of size DoFNo, with the input coords of the particles
+   !> @param   Force   Array of size DoFNo, on exit has the forces at X
+   !> @returns GetPotential   Real value of the potential at X 
+   !*******************************************************************************
+   
    REAL FUNCTION GetPotential( X, Force )
       IMPLICIT NONE
       REAL, DIMENSION(:), TARGET, INTENT(IN)  :: X
@@ -374,91 +608,52 @@ MODULE PotentialModule
       CALL ERROR( .NOT. PotentialModuleIsSetup, " PotentialModule.GetPotential : Module not Setup" )
 
       ! Check dimension of function arguments
-      CALL ERROR( SIZE(X) /= 3*AtomNo,    " PotentialModule.GetPotential : wrong dimension of coordinate array " )
+      CALL ERROR( SIZE(X) /= DoFNo,       " PotentialModule.GetPotential : wrong dimension of coordinate array " )
       CALL ERROR( SIZE(X) /= SIZE(Force), " PotentialModule.GetPotential : wrong dimension of forces array " )
       
       ! Depending on system number, different operations
       SELECT CASE( SystemNumber )
 
+         ! Gas of free particles, potential and forces are null
          CASE( FREE_PARTICLES )
             GetPotential = 0.0
             Force(:) = 0.0
 
+         ! Gas of Lennard-Jones particles, compute pair potential forces
          CASE( LJ_PAIR_POTENTIAL )
             CALL PairPotential( X(:), GetPotential, Force(:) )
 
+         ! Call SIESTA to compute the forces
          CASE( SIESTA_ONTHEFLY ) 
-            ! Copy coordianates in x,y,z format
+         
+            ! Copy coordianates in x,y,z format, convert them to 
             AtomicPositions = RESHAPE( X, (/ 3, AtomNo /) )
-            AtomicPositions = AtomicPositions * MyConsts_Bohr2Ang 
+            AtomicPositions = AtomicPositions * LengthConversion( InternalUnits, SIESTAUnits ) 
+            
             ! compute forces with siesta
             IF ( PBC ) THEN
-               CALL siesta_forces( SystemLabel, AtomNo, AtomicPositions, UnitVectors*MyConsts_Bohr2Ang, &
+               CALL siesta_forces( SystemLabel, AtomNo, AtomicPositions, UnitVectors*LengthConversion(InternalUnits,SIESTAUnits), &
                              GetPotential, TmpForces, Stress )
             ELSE
                CALL siesta_forces( label=SystemLabel, na=AtomNo, xa=AtomicPositions, energy=GetPotential, fa=TmpForces )
             END IF
+            
+            ! Copy forces in vector format and convert them to internal units 
             Force = RESHAPE( TmpForces, (/ 3*AtomNo /) )
-            Force = Force / MyConsts_Hartree2eV * MyConsts_Bohr2Ang 
-            GetPotential = GetPotential / MyConsts_Hartree2eV
+            Force = Force * ForceConversion(SIESTAUnits,InternalUnits)
+            ! Convert potential to internal units
+            GetPotential = GetPotential * EnergyConversion(SIESTAUnits,InternalUnits)
+            
       END SELECT
 
    END FUNCTION GetPotential
 
+   
+!============================================================================================
+!                  PRIVATE SUBROUTINES
 !============================================================================================
 
-   SUBROUTINE DisposePotential(  )
-      IMPLICIT NONE
 
-      ! exit if module is not setup
-      IF ( .NOT. PotentialModuleIsSetup ) RETURN
-
-      PotentialModuleIsSetup = .FALSE.
-      
-   END SUBROUTINE DisposePotential
-
-!============================================================================================
-
-   SUBROUTINE SetNearTranslations( )
-      IMPLICIT NONE
-      INTEGER :: i, j, k
-      REAL, DIMENSION(3,216) :: TmpNearTranslations
-      REAL, DIMENSION(3) :: Vector
-      REAL :: Distance
-
-      NearPeriodicImages = 0
-      IF ( PBC ) THEN
-         ! Define how many neighbour cells are checked in the pair potential summation
-         DO i = -5, +5
-            DO j = -5, +5
-               DO k = -5, +5
-                  Vector = FractionalToCartesian( (/ REAL(i), REAL(j), REAL(k) /) )
-                  Distance = SQRT( TheOneWithVectorDotVector( Vector, Vector ) )
-                  IF ( Distance < CutOff .OR. ( abs(i) <= 1 .AND. abs(j) <= 1 .AND. abs(k) <= 1 )) THEN
-                     NearPeriodicImages = NearPeriodicImages + 1
-                     TmpNearTranslations(:,NearPeriodicImages) =  Vector
-                  END IF
-               END DO
-            END DO
-         END DO
-!          PRINT*, " Number of cells included in the summation: ", NearPeriodicImages
-         ALLOCATE( NearTranslations(3,NearPeriodicImages) )
-         NearTranslations(:,:) =  TmpNearTranslations(:,1:NearPeriodicImages )
-
-!          PRINT*, " "
-!          DO i = 1, NearPeriodicImages
-!             PRINT*, " Translation # ", i, "  Vector: ", NearTranslations(:,i)
-!          END DO
-
-      ELSE 
-         NearPeriodicImages = 1
-         ALLOCATE( NearTranslations(3,NearPeriodicImages) )
-         NearTranslations(:,1) =  (/ 0., 0., 0. /) 
-      ENDIF
-
-   END SUBROUTINE SetNearTranslations
-
-!============================================================================================
 
    SUBROUTINE PairPotential( Positions, V, Forces )
       IMPLICIT NONE
@@ -482,13 +677,13 @@ MODULE PotentialModule
             ! Extract distance vector between the i-th and j-th atoms
             FirstDist = iCoord( : ) - Positions( (jAtom-1)*3+1 : jAtom*3 )
 
-            DO iTrasl = 1, NearPeriodicImages
+            DO iTrasl = 1, NeighbourCells%Nr
 
                ! Compute periodic image of the distance
-               TranslatedDist = FirstDist + NearTranslations(:,iTrasl) 
+               TranslatedDist = FirstDist + NeighbourCells%TranslVectors(:,iTrasl) 
                Distance = SQRT( TheOneWithVectorDotVector( TranslatedDist , TranslatedDist ) )
 
-               IF (( iAtom == jAtom ) .AND. ( ALL(NearTranslations(:,iTrasl) == (/ 0., 0., 0. /)) )) CYCLE
+               IF (( iAtom == jAtom ) .AND. ( ALL(NeighbourCells%TranslVectors(:,iTrasl) == (/ 0., 0., 0. /)) )) CYCLE
 
                IF ( Distance > CutOff ) CYCLE
 
@@ -514,15 +709,16 @@ MODULE PotentialModule
 
 !============================================================================================
 
-!    REAL FUNCTION MorseV( Positions, Forces ) RESULT(V) 
-!       IMPLICIT NONE
-!       REAL, DIMENSION(:), TARGET, INTENT(IN)  :: Positions
-!       REAL, DIMENSION(:), TARGET, INTENT(OUT) :: Forces 
-! 
-!       V = MorseDe * ( exp(-2.0*MorseAlpha*Positions(1)) - 2.0 * exp(-MorseAlpha*Positions(1)) )  
-!       Forces(1) = 2.0 * MorseAlpha * MorseDe * (  exp(-2.0*MorseAlpha*Positions(1)) - exp(-MorseAlpha*Positions(1)) )  
-! 
-!    END FUNCTION MorseV
+    REAL FUNCTION MorseV( Position, Force ) RESULT(V) 
+       IMPLICIT NONE
+       REAL, INTENT(IN)  :: Position
+       REAL, INTENT(OUT) :: Force 
+ 
+       V = MorseDe * ( exp(-2.0*MorseAlpha*(Position-MorseEquilDist)) - 2.0 * exp(-MorseAlpha*(Position-MorseEquilDist)) )  
+       Force = 2.0 * MorseAlpha * MorseDe * (  exp(-2.0*MorseAlpha*(Position-MorseEquilDist)) -         &
+                     exp(-MorseAlpha*(Position-MorseEquilDist)) )  
+ 
+    END FUNCTION MorseV
       
    REAL FUNCTION LennardJones( Distance, Derivative ) RESULT(V) 
       IMPLICIT NONE
@@ -533,6 +729,7 @@ MODULE PotentialModule
       Derivative = - 12.0 * LJ_WellDepth / Distance * ( (LJ_EquilDist/Distance)**12 - (LJ_EquilDist/Distance)**6 )
    END FUNCTION LennardJones
 
+!============================================================================================
 
    SUBROUTINE WriteSIESTAInput()
       IMPLICIT NONE
@@ -712,134 +909,6 @@ END MODULE PotentialModule
 !    !> Parameter for finite difference computation
 !    REAL, PARAMETER :: Delta = 1.0E-4
 ! 
-!    CONTAINS
-! 
-! 
-! ! ************************************************************************************
-! 
-! 
-!       SUBROUTINE SetupPotential( MassHydro, MassCarb, Collinear )
-!          IMPLICIT NONE
-!          REAL, INTENT(IN)     :: MassHydro, MassCarb
-!          LOGICAL, OPTIONAL    :: Collinear
-!          REAL, DIMENSION(124) :: Positions
-!          INTEGER :: iCoord
-!          REAL    :: Value
-!          REAL, DIMENSION(4,4)       :: HessianSystem
-! 
-!          ! exit if module is setup
-!          IF ( PotentialModuleIsSetup ) RETURN
-! 
-!          ! setup force constant ( in eV per Ang^2 )
-!          rkc = (36.0*gam2+6.0*delt)/(bndprm**2)
-! 
-!          ! Setup if potential is collinear or not
-!          IF ( PRESENT( Collinear ) ) THEN
-!             CollinearPES =  Collinear
-!          ELSE
-!             CollinearPES = .FALSE.
-!          END IF
-! 
-! 
-!          ! Define the reference 4D potential for the graphite in minimum E
-! 
-!          ! Set guess starting coordinate for the minimization of the slab potential
-!          Positions(1:124) = 0.0
-!          Positions(3) = HZEquilibrium   ! reasonable guess for H Z coordinate
-!          Positions(4) = C1Puckering
-! 
-!          ! Minimize potential
-!          MinimumEnergy =  MinimizePotential( Positions, (/ (.TRUE., iCoord=1,124)  /) )      
-! 
-!          ! Translate to bring C3,C4,C5 in the Z=0 plane
-!          Value = (Positions(5)+Positions(6)+Positions(7))/3.0
-!          DO iCoord= 3,124
-!             Positions(iCoord) = Positions(iCoord) - Value
-!          END DO
-! 
-!          ! Store the coordinate of the slab
-!          MinSlab(:) = Positions(5:124)
-! 
-!          ! Store the carbon puckering and the H Z at equilibrium
-!          C1Puckering = Positions(4)
-!          HZEquilibrium = Positions(3)
-! 
-!          ! Set the normal modes of the 4D potential
-! 
-!          ! compute the hessian
-!          HessianSystem = HessianOfTheSystem( Positions, MassHydro, MassCarb )
-! 
-!          ! Diagonalize the hessian
-!          CALL TheOneWithDiagonalization( HessianSystem, NormalModes4D_Vecs, NormalModes4D_Freq )
-! 
-! 
-! 
-! 
-! #if defined(VERBOSE_OUTPUT)
-!          WRITE(*,502) SQRT(NormalModes4D_Freq(1)), "au", "au", NormalModes4D_Vecs(:,1), &
-!                       SQRT(NormalModes4D_Freq(2)), "au", "au", NormalModes4D_Vecs(:,2), &
-!                       SQRT(NormalModes4D_Freq(3)), "au", "au", NormalModes4D_Vecs(:,3), &
-!                       SQRT(NormalModes4D_Freq(4)), "au", "au", NormalModes4D_Vecs(:,4)
-! 
-!          502 FORMAT (/, " 4D system potential normal modes             ",/, &
-!                         " 1) Frequency:                   ",1F15.2,1X,A, /, &
-!                         "    Mass-scaled coords of the normal mode / ",A," : ",4F12.6, /, &
-!                         " 2) Frequency:                   ",1F15.2,1X,A, /, &
-!                         "    Mass-scaled coords of the normal mode / ",A," : ",4F12.6, /, &
-!                         " 3) Frequency:                   ",1F15.2,1X,A, /, &
-!                         "    Mass-scaled coords of the normal mode / ",A," : ",4F12.6, /, &
-!                         " 4) Frequency:                   ",1F15.2,1X,A, /, &
-!                         "    Mass-scaled coords of the normal mode / ",A," : ",4F12.6, 2/)
-! 
-!          WRITE(*,*) " Potential has been setup"
-!          WRITE(*,*) " "
-! #endif
-!       END SUBROUTINE
-! 
-! 
-! ! ************************************************************************************
-! 
-!       ! Setup initial conditions for the H atom + C slab for 
-!       ! a simulation of vibrational relaxation
-!       ! The slab is fixed in the equilibrium position with no momentum ( classical 0K )
-!       ! The initial position and momenta of C and H are randomly chosen among a set of 
-!       ! conditions which are given as input
-!       ! data are initialized in ATOMIC UNITS
-!       SUBROUTINE ZeroKelvinSlabConditions( Positions, Velocities, CHInitialConditions, RandomNr )
-!          IMPLICIT NONE
-!          REAL, DIMENSION(:), INTENT(OUT) :: Positions, Velocities
-!          REAL, DIMENSION(:,:), INTENT(IN) :: CHInitialConditions
-!          TYPE(RNGInternalState), INTENT(INOUT) :: RandomNr
-!          INTEGER :: NDoF, iBath, NRandom, NInit
-!          REAL :: Value
-! 
-!          ! Check the number of non frozen degree of freedom
-!          NDoF = size( Positions )
-!          CALL ERROR( size(Velocities) /= NDoF, "PotentialModule.ZeroKelvinSlabConditions: array dimension mismatch" )
-! 
-!          ! Check if the nr of dimension is compatible with the slab maximum size
-!          CALL ERROR( (NDoF > 124) .OR. (NDoF < 4), "PotentialModule.ZeroKelvinSlabConditions: wrong number of DoFs" )
-! 
-!          ! Check the nr of starting conditions given ( there should be 8 coordinates: 4 positions and 4 momenta )
-!          NRandom = size( CHInitialConditions, 1 )
-!          CALL ERROR( size( CHInitialConditions, 2 ) /= 8, "PotentialModule.ZeroKelvinSlabConditions: wrong number of coords " )
-!       
-!          ! Set the velocities to zero
-!          Velocities(:) = 0.0
-! 
-!          ! Set the slab in the equilibrium geometry
-!          Positions(5:NDoF) = MinSlab(1:NDoF-4)
-! 
-!          ! Choose a random initial set of coordinates
-!          NInit = CEILING( UniformRandomNr(RandomNr)*real(NRandom)  )
-! 
-!          ! Accordingly set position and velocity
-!          Positions(1:4) = CHInitialConditions( NInit, 1:4 )
-!          Velocities(1:4) = CHInitialConditions( NInit, 5:8 )
-! 
-!       END SUBROUTINE ZeroKelvinSlabConditions
-! 
-! 
 !       ! Setup initial conditions for the H atom + C slab
 !       ! data are initialized in ATOMIC UNITS
 !       SUBROUTINE ThermalEquilibriumConditions( Positions, Velocities, Temperature, MassHydro, MassCarb, RandomNr )
@@ -901,73 +970,7 @@ END MODULE PotentialModule
 !       END SUBROUTINE ThermalEquilibriumConditions
 ! 
 ! 
-! ! ************************************************************************************
-! 
-!       ! Setup initial conditions for the scattering of H atom on a thermalized C slab
-!       ! data are initialized in ATOMIC UNITS
-!       SUBROUTINE ScatteringConditions( Positions, Velocities, ImpactParam, InitZ, IncEnergy, Temperature, MassHydro, MassCarb )
-!          IMPLICIT NONE
-! 
-!          REAL, DIMENSION(:), INTENT(OUT) :: Positions, Velocities
-!          REAL, INTENT(IN)  :: Temperature, MassCarb, MassHydro
-!          REAL, INTENT(IN)  :: ImpactParam, InitZ, IncEnergy
-!          INTEGER           :: nCarbon, NDoF
-!          REAL              :: SigmaMomentum, SigmaPosition
-!          REAL              :: gaus1, gaus2, gvar1, gvar2, gr1, gr2, gs1, gs2
-! 
-!          ! Error if module not have been setup yet
-!          CALL ERROR( .NOT. PotentialModuleIsSetup, "PotentialModule.CarbonForceConstant : Module not Setup" )
-! 
-!          ! Check the number of non frozen degree of freedom
-!          NDoF = size( Positions )
-!          CALL ERROR( size(Velocities) /= NDoF, "PotentialModule.ScatteringConditions: array dimension mismatch" )
-! 
-!          ! Check if the nr of dimension is compatible with the slab maximum size
-!          CALL ERROR( (NDoF > 124) .OR. (NDoF < 4), "PotentialModule.ScatteringConditions: wrong number of DoFs" )
-! 
-!          ! Scattering position of H atom
-!          Positions(1) = ImpactParam
-!          Positions(2) = 0.00001
-!          Positions(3) = InitZ
-! 
-!          ! Velocity of the H atom
-!          Velocities(1) = 0.0
-!          Velocities(2) = 0.0
-!          Velocities(3) = - sqrt( 2.0* IncEnergy / MassHydro )
-! 
-!          ! standard deviation of the position distribution (force constant needs to be in AU)
-!          SigmaPosition = sqrt( Temperature / (rkc*(MyConsts_Bohr2Ang)**2/MyConsts_Hartree2eV) )
-!          ! standard deviation of the momentum distribution
-!          SigmaMomentum = sqrt( MassCarb * Temperature )
-! 
-!          ! Cycle over carbon atoms in the slab
-!          DO nCarbon = 4,NDoF
-! 
-!             ! Initialization
-!             Positions(nCarbon)   = 0.0
-!             Velocities(nCarbon)   = 0.0
-! 
-!             ! Generate gaussian random numbers for position and velocity
-!             DO 
-!                call random_number(gaus1)
-!                call random_number(gaus2)
-!                gvar1=2.0*gaus1-1
-!                gvar2=2.0*gaus2-1
-!                gr1=gvar1**2+gvar2**2
-!                IF (gr1 < 1.0) EXIT
-!             END DO
-!             gr2=sqrt(-2.0*alog(gr1)/gr1)
-!             gs1=gvar1*gr2
-!             gs2=gvar2*gr2
-! 
-!             ! Set position and velocity of the carbon atom
-!             Positions(nCarbon)  = SigmaPosition*gs1
-!             Velocities(nCarbon) = SigmaMomentum*gs2/MassCarb
-! 
-!          END DO
-! 
-!       END SUBROUTINE ScatteringConditions
-! 
+
 ! 
 ! ! ******************************************************************************************      
 ! 
@@ -1098,10 +1101,4 @@ END MODULE PotentialModule
 ! !       CALL TheOneWithMatrixPrintedLineAfterLine( Hessian )
 ! 
 !    END FUNCTION HessianOfTheSystem
-! 
-! ! ******************************************************************************************      
-
-!    
-!       
-! END MODULE PotentialModule
 ! 
