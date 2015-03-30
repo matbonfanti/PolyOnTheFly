@@ -406,7 +406,7 @@ ${OBJDIR}/%.o : ${SRCDIR}/%.f90
 	rm $*.o $(shell echo $* | tr A-Z a-z).mod
 
 # Make target to build required directories
-directories : ${PPDIR} ${OBJDIR} ${EXEDIR}
+directories : 
 	mkdir -p ${PPDIR} ${OBJDIR} ${EXEDIR}
 
 # Make documentation with doxygen
