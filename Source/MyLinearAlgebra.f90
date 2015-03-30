@@ -19,10 +19,13 @@
 !>  \par Updates
 !>  \arg 9 March 2013: diagonalization implemented with Numerical Recipes
 !>  \arg 9 September 2013: diagonalization implemented with LAPACK
+!>  \arg 10 February 2015: added TheOneWithSymmetricLinearSystem with LAPACK only
+!>  \arg 12 February 2015: TheOneWithMatrixVectorProduct in real and complex version
 !
-!>  \todo          Implement diagonalization with LAPACK
 !>  \todo          Implement matrix inversion with Numerical Recipes
 !>  \todo          Implement computation of euler angles from rotation matrix
+!>  \todo          Implement computation of the euclidean norm 
+!>  \todo          Move NR subroutines to NRUtility module 
 !
 !***************************************************************************************
 !
@@ -331,6 +334,82 @@ MODULE MyLinearAlgebra
 
    END FUNCTION TheOneWithInverseMatrix
 
+
+!*******************************************************************************
+!          TheOneWithSymmetricLinearSystem
+!*******************************************************************************
+!> Function giving back the solution of the system of linear equations A * X = B
+!> with A being the nxn symmetric positive definite matrix and B being a n vector
+!> This code is a wrapper to linear algebra libraries:
+!> \arg Lapack routines Xpotrf and Xpotrs which factorize the symmetrix positive
+!>   definite matrix and then solve the linear systems
+!>   see  http://www.netlib.org/lapack/lug/node38.html
+!>   
+!> @param      Matrix     NxN array with the matrix A
+!> @param      Vector     N array with the vector B 
+!> @returns    Solution   N array with the solution of the linear system
+!*******************************************************************************
+   FUNCTION TheOneWithSymmetricLinearSystem( Matrix, Vector ) RESULT( Solution )
+      IMPLICIT NONE
+      REAL, DIMENSION(:), INTENT(IN)                          :: Vector
+      REAL, DIMENSION(size(Vector),size(Vector)), INTENT(IN)  :: Matrix
+      REAL, DIMENSION(size(Vector))                           :: Solution
+
+#if defined(WITH_LAPACK)
+      REAL, DIMENSION(size(Vector),size(Vector))    :: Mat
+      INTEGER( SHORT_INTEGER_KIND )                 :: DimShort, Stat
+      CHARACTER(200)                                :: ErrMsg
+#endif
+      
+#if defined(WITH_LAPACK)
+
+      ! Make a copy of the input matrix
+      Mat = Matrix
+      ! Define the dimension in a lapack compatible integer kind
+      DimShort = size(Vector)
+      Stat = 0
+      ! Initialize the solution
+      Solution = Vector
+
+      ! xPOTRF computes the Cholesky factorization of a real symmetric positive definite matrix A
+
+      IF ( KIND( Mat(1,1) ) == SINGLE_PRECISION_KIND ) THEN
+            CALL SPOTRF( "U", DimShort, Mat, DimShort, Stat ) 
+      ELSE IF ( KIND( Mat(1,1) ) == DOUBLE_PRECISION_KIND ) THEN
+            CALL DPOTRF( "U", DimShort, Mat, DimShort, Stat ) 
+      END IF
+
+      IF ( Stat < 0 ) THEN
+         WRITE(ErrMsg, *) " TheOneWithSymmetricLinearSystem: xPOTRF: the ",-Stat,"-th argument has an illegal value."
+         CALL AbortWithError( ErrMsg )
+      END IF
+      IF ( Stat > 0 ) THEN
+         WRITE(ErrMsg, *) " TheOneWithSymmetricLinearSystem: xPOTRF: the leading minor of order ",Stat," is not positive"
+         CALL AbortWithError( ErrMsg )
+      ENDIF
+
+      ! DPOTRS - solve a system of linear equations A*X = B with a symmetric positive definite matrix A using the Cholesky 
+      !          factorization A = U**T*U or A =  L*L**T computed by DPOTRF
+
+      IF ( KIND( Mat(1,1) ) == SINGLE_PRECISION_KIND ) THEN
+            CALL SPOTRS( "U", DimShort, 1, Mat, DimShort, Solution, DimShort, Stat  )
+      ELSE IF ( KIND( Mat(1,1) ) == DOUBLE_PRECISION_KIND ) THEN
+            CALL DPOTRS( "U", DimShort, 1, Mat, DimShort, Solution, DimShort, Stat )
+      END IF
+
+      IF ( Stat < 0 ) THEN
+         WRITE(ErrMsg, *) " TheOneWithSymmetricLinearSystem: xPOTRS: the ",-Stat,"-th argument has an illegal value."
+         CALL AbortWithError( ErrMsg )
+      END IF
+
+#endif
+#if !defined(WITH_LAPACK)
+      CALL AbortWithError( " TheOneWithSymmetricLinearSystem: linear system solution implemented only with LAPACK ")
+#endif
+
+   END FUNCTION TheOneWithSymmetricLinearSystem
+
+
 !*******************************************************************************
 !          TheOneWithMatrixMultiplication
 !*******************************************************************************
@@ -622,7 +701,7 @@ MODULE MyLinearAlgebra
       DEALLOCATE( OffDiagonal )
 #endif
 #if !defined(WITH_NR)
-      CALL AbortWithError( " TheOneWithDiagonalization: Matrix diagonalization implemented only with NR ")
+      CALL AbortWithError( " TheOneWithDiagonalization: Matrix diagonalization implemented only with NR or LAPACK ")
 #endif
 #endif
 
