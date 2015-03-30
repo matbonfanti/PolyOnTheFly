@@ -35,6 +35,7 @@ MODULE PotentialModule
    USE UnitConversion
    USE RandomNumberGenerator
    USE fsiesta
+   USE DFTBWrapper
 
    PRIVATE
 
@@ -58,6 +59,7 @@ MODULE PotentialModule
    INTEGER, PARAMETER  ::  FREE_PARTICLES    = 0
    INTEGER, PARAMETER  ::  LJ_PAIR_POTENTIAL = 1
    INTEGER, PARAMETER  ::  SIESTA_ONTHEFLY   = 2
+   INTEGER, PARAMETER  ::  DFTB_ONTHEFLY     = 3
    !> @}
 
    !> Setup variable for the potential
@@ -75,6 +77,8 @@ MODULE PotentialModule
    LOGICAL, SAVE :: PBC = .FALSE.
    !> Vectors of the unit cell
    REAL, DIMENSION(3,3), SAVE :: UnitVectors = RESHAPE( (/1.E+100, 0.0, 0.0 , 0.0, 1.E+100, 0.0, 0.0, 0.0, 1.E+100/), (/3,3/) )
+   !> Atomic postions read from input file
+   REAL, DIMENSION(:,:), SAVE, ALLOCATABLE  :: AtomicPositions 
 
    !> \name PAIR POTENTIALS 
    !> Parameters for a generic pair potential 
@@ -103,8 +107,18 @@ MODULE PotentialModule
    !> @{
    CHARACTER(100), SAVE                     :: SystemLabel     !< Label of the system for SIESTA
    INTEGER, DIMENSION(:), SAVE, ALLOCATABLE :: AtomicNumbers   !< Atomic numbers of the atoms 
-   REAL, DIMENSION(:,:), SAVE, ALLOCATABLE  :: AtomicPositions !< Positions of the atoms
    TYPE(Units), SAVE                        :: SIESTAUnits     !< Units definition for SIESTA
+   !> @}
+
+   !> \name DFTB+ ON-THE-FLY FORCES
+   !> Variables for DFTB+
+   !> @{
+   CHARACTER(100), SAVE                          :: LocalDir        !< local directory where to run DFTB+
+   CHARACTER(100), SAVE                          :: HSDInputFile    !< name of the HSD file
+   CHARACTER(3), DIMENSION(:), SAVE, ALLOCATABLE :: AtomicLabels    !< Atomic labels of the atoms 
+   CHARACTER(120), DIMENSION(200), SAVE          :: ReadFileContent !< Lines of the hsd file other than the geometry
+   CHARACTER(120), SAVE                          :: AtomTypeString  !< string defining the DFTB+ atom types
+   INTEGER, DIMENSION(:), SAVE, ALLOCATABLE      :: AtomTypes       !< Atom types of the atoms 
    !> @}
 
 
@@ -147,33 +161,42 @@ MODULE PotentialModule
       WRITE(ErrorMsg,*) " PotentialModule.SetupPotential : no potential corresponds to Id = ", SystemNumber
       CALL ERROR ( .NOT. PotentialIdExists(SystemNumber),  ErrorMsg )
 
-      ! GENERAL VARIABLES: no of atoms, PBC ...
-      
-      ! number of particles
-      CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
-      
-      ! periodic system and size of the simulation cell
-      CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
-      IF ( PBC ) THEN
-         CALL SetFieldFromInput( PotentialData, "AUnitVector", UnitVectors(:,1) )
-         CALL SetFieldFromInput( PotentialData, "BUnitVector", UnitVectors(:,2) )
-         CALL SetFieldFromInput( PotentialData, "CUnitVector", UnitVectors(:,3) )
-         UnitVectors = UnitVectors * LengthConversion( PotentialUnits, InternalUnits )
-      END IF
-      
+     
       ! SYSTEM SPECIFIC VARIABLES 
       
       SELECT CASE( SystemNumber )
 
+         ! ===========================================================================================
          ! Gas of free particles
          CASE( FREE_PARTICLES )
          
-            ! -------------------------------|
-            ! NO ADDITIONAL VARIABLE TO READ |
-            ! -------------------------------|
+            ! number of particles
+            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
             
+            ! periodic system and size of the simulation cell
+            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
+            IF ( PBC ) THEN
+               CALL SetFieldFromInput( PotentialData, "AUnitVector", UnitVectors(:,1) )
+               CALL SetFieldFromInput( PotentialData, "BUnitVector", UnitVectors(:,2) )
+               CALL SetFieldFromInput( PotentialData, "CUnitVector", UnitVectors(:,3) )
+               UnitVectors = UnitVectors * LengthConversion( PotentialUnits, InternalUnits )
+            END IF
+
+         ! ===========================================================================================
          ! Gas of Lennard-Jones particles
          CASE( LJ_PAIR_POTENTIAL )
+
+            ! number of particles
+            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
+            
+            ! periodic system and size of the simulation cell
+            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
+            IF ( PBC ) THEN
+               CALL SetFieldFromInput( PotentialData, "AUnitVector", UnitVectors(:,1) )
+               CALL SetFieldFromInput( PotentialData, "BUnitVector", UnitVectors(:,2) )
+               CALL SetFieldFromInput( PotentialData, "CUnitVector", UnitVectors(:,3) )
+               UnitVectors = UnitVectors * LengthConversion( PotentialUnits, InternalUnits )
+            END IF
 
             ! Store the pair potential parameters
             CALL SetFieldFromInput( PotentialData, "WellDepth", LJ_WellDepth )
@@ -186,8 +209,21 @@ MODULE PotentialModule
             LJ_EquilDist = LJ_EquilDist * LengthConversion( PotentialUnits, InternalUnits )
             CutOff       = CutOff       * LengthConversion( PotentialUnits, InternalUnits )
  
+         ! ===========================================================================================
          ! SIESTA on-the-fly computation of the forces
          CASE( SIESTA_ONTHEFLY )
+
+            ! number of particles
+            CALL SetFieldFromInput( PotentialData, "AtomNo", AtomNo, 1 )
+            
+            ! periodic system and size of the simulation cell
+            CALL SetFieldFromInput( PotentialData, "PBC", PBC, .FALSE. )
+            IF ( PBC ) THEN
+               CALL SetFieldFromInput( PotentialData, "AUnitVector", UnitVectors(:,1) )
+               CALL SetFieldFromInput( PotentialData, "BUnitVector", UnitVectors(:,2) )
+               CALL SetFieldFromInput( PotentialData, "CUnitVector", UnitVectors(:,3) )
+               UnitVectors = UnitVectors * LengthConversion( PotentialUnits, InternalUnits )
+            END IF
 
             ! Allocate memory to store initial definition of atomic info
             ALLOCATE( AtomicNumbers(AtomNo), AtomicPositions(3,AtomNo) )
@@ -201,6 +237,22 @@ MODULE PotentialModule
                CALL SetFieldFromInput( PotentialData, trim(adjustl(String)), AtomicPositions(:,iAtom) )
             END DO
             AtomicPositions = AtomicPositions * LengthConversion( PotentialUnits, InternalUnits )
+ 
+        ! ===========================================================================================
+        ! DFTB+ on-the-fly computation of the forces
+         CASE( DFTB_ONTHEFLY )
+
+            ! name of the hsd input file
+            CALL SetFieldFromInput( PotentialData, "HSDInputFile", HSDInputFile, "dftb_in.hsd" )
+
+            ! Initialize ReadFileContent with comment lines
+            ReadFileContent(:) = "#"
+
+            ! Read from DFTB+ input file the parameters for the calculation and the initial geometry
+            CALL DFTBInputParser( HSDInputFile, ReadFileContent, PBC, UnitVectors, AtomNo, AtomicLabels, AtomicPositions )
+
+            ! When XYZ file is given, read initial set of snapshots from XYZ
+!             CALL ReadXYZSnapshots()
 
       END SELECT
       
@@ -226,6 +278,7 @@ MODULE PotentialModule
 
       PotentialIdExists =  ( ( IdNr == FREE_PARTICLES    ) .OR. &
                              ( IdNr == LJ_PAIR_POTENTIAL ) .OR. &
+                             ( IdNr == DFTB_ONTHEFLY     ) .OR. &
                              ( IdNr == SIESTA_ONTHEFLY   )  )
 
    END FUNCTION PotentialIdExists
@@ -250,8 +303,9 @@ MODULE PotentialModule
       ! If the potential has been already set up, print warning and skip the rest of the subroutine
       CALL WARN( PotentialModuleIsSetup, " SyncroPotentialDataAcrossNodes: Potential module has been already set up " ) 
       IF ( PotentialModuleIsSetup ) RETURN
-     
+    
       ! Syncro GENERAL VARIABLES that are relevant for all the systems
+      CALL MyMPI_BroadcastToSlaves( SystemNumber )
       CALL MyMPI_BroadcastToSlaves( AtomNo )
       CALL MyMPI_BroadcastToSlaves( PBC )
       IF ( PBC ) THEN
@@ -290,6 +344,22 @@ MODULE PotentialModule
                CALL MyMPI_BroadcastToSlaves( AtomicPositions(:,iAtom) )
             END DO
 
+        ! DFTB+ on-the-fly computation of the forces
+         CASE( DFTB_ONTHEFLY )
+
+            ! Allocate memory to store initial definition of atomic info
+            IF ( .NOT. ALLOCATED(AtomicLabels) )    ALLOCATE( AtomicLabels(AtomNo) )
+            IF ( .NOT. ALLOCATED(AtomicPositions) )  ALLOCATE( AtomicPositions(3,AtomNo) )
+
+            ! Synchro atomic labes and atomic positions
+            CALL MyMPI_BroadcastToSlaves( AtomicLabels )
+            DO iAtom = 1, AtomNo
+               CALL MyMPI_BroadcastToSlaves( AtomicPositions(:,iAtom) )
+            END DO
+
+            ! Synchro the DFTB+ hamiltonian input lines
+            CALL MyMPI_BroadcastToSlaves( ReadFileContent )
+
       END SELECT
       
    END SUBROUTINE SyncroPotentialDataAcrossNodes
@@ -311,7 +381,8 @@ MODULE PotentialModule
    SUBROUTINE SetupPotential(  )
       IMPLICIT NONE
       LOGICAL           :: FileExists
-      INTEGER           :: iAtom
+      INTEGER           :: iAtom, nUnique, jUnique
+      CHARACTER(3), DIMENSION(100) :: UniqueAtomicLabels
 
       ! exit if module is setup
       CALL WARN( PotentialModuleIsSetup, " SetupPotential: Potential module has been already set up " ) 
@@ -362,6 +433,52 @@ MODULE PotentialModule
             ! Initialize siesta processes
             CALL siesta_launch( TRIM(ADJUSTL(SystemLabel)), 1 )
 
+        ! DFTB+ on-the-fly computation of the forces
+         CASE( DFTB_ONTHEFLY )
+
+            ! In a 3D system, each particle has 3 dof
+            DoFNo = 3 * AtomNo
+
+            ! Define string with atomic labels and the kind definition of the atoms
+
+            ! Find unique labels
+            UniqueAtomicLabels(:) = " " 
+            UniqueAtomicLabels(1) = AtomicLabels(1)
+            nUnique = 1
+            extcycle: DO iAtom = 2, AtomNo
+               DO jUnique = 1, nUnique
+                  IF ( TRIM(ADJUSTL(AtomicLabels(iAtom))) == TRIM(ADJUSTL(UniqueAtomicLabels(jUnique))) ) THEN
+                     CYCLE extcycle
+                  END IF
+               END DO
+               nUnique = nUnique + 1
+               UniqueAtomicLabels(nUnique) = AtomicLabels(iAtom)
+            END DO extcycle
+
+            ! join labels in the atom type string 
+            AtomTypeString = " "
+            DO jUnique = 1, nUnique
+               AtomTypeString = TRIM(ADJUSTL(AtomTypeString)) // " " // UniqueAtomicLabels(jUnique)
+            END DO
+
+            ! define the type of each atom
+            ALLOCATE( AtomTypes( AtomNo ) )
+            DO iAtom = 1, AtomNo
+               DO jUnique = 1, nUnique
+                  IF ( TRIM(ADJUSTL(AtomicLabels(iAtom))) == TRIM(ADJUSTL(UniqueAtomicLabels(jUnique))) ) THEN
+                     AtomTypes(iAtom) = jUnique
+                     EXIT
+                  END IF
+               END DO
+            END DO
+
+            ! Set scratch directory to run DFTB+
+            WRITE(LocalDir,"(A,I0.3)") "POTF_DFTB_", __MPI_CurrentNrOfProc
+
+            ! Create scratch directory and move there
+            ! TODO: ADD ERROR MESSAGES!!!
+            CALL EXECUTE_COMMAND_LINE( "mkdir -p "//TRIM(ADJUSTL(LocalDir)) )
+
       END SELECT
 
       ! Module is now ready
@@ -387,8 +504,10 @@ MODULE PotentialModule
 
       ! Deallocate allocated memory
       IF ( ALLOCATED(AtomicNumbers) )    DEALLOCATE( AtomicNumbers )
+      IF ( ALLOCATED(AtomicLabels) )     DEALLOCATE( AtomicLabels )
       IF ( ALLOCATED(AtomicPositions) )  DEALLOCATE( AtomicPositions )
-      
+      IF ( ALLOCATED(AtomTypes) )        DEALLOCATE( AtomTypes )
+
       ! Set status variable
       PotentialModuleIsSetup = .FALSE.
       
@@ -495,6 +614,10 @@ MODULE PotentialModule
             DO i = 1, AtomNo
                GetMasses( (i-1)*3+1 : (i-1)*3+3 ) = AtomicMass( AtomicNumbers(i) )
             END DO
+         CASE( DFTB_ONTHEFLY )
+            DO i = 1, AtomNo
+               GetMasses( (i-1)*3+1 : (i-1)*3+3 ) = AtomicMass( AtomicLabelToNumber( AtomicLabels(i)) )
+            END DO
          CASE DEFAULT
                CALL AbortWithError( " PotentialModule.GetMasses : undefined SystemNumber " )
       END SELECT
@@ -577,6 +700,13 @@ MODULE PotentialModule
                X( (i-1)*3+1 : (i-1)*3+3 ) = AtomicPositions( :,i )
             END DO
 
+         ! For DFTB+, use initial coordinates defined from input file
+         CASE( DFTB_ONTHEFLY )
+
+            DO i = 1, AtomNo
+               X( (i-1)*3+1 : (i-1)*3+3 ) = AtomicPositions( :,i )
+            END DO
+
       END SELECT
 
    END SUBROUTINE GetInitialPositions
@@ -643,7 +773,25 @@ MODULE PotentialModule
             Force = Force * ForceConversion(SIESTAUnits,InternalUnits)
             ! Convert potential to internal units
             GetPotential = GetPotential * EnergyConversion(SIESTAUnits,InternalUnits)
+          
+         ! Call DFTB+ to compute the forces
+         CASE( DFTB_ONTHEFLY )   
+
+            ! Copy coordianates in x,y,z format
+            AtomicPositions = RESHAPE( X, (/ 3, AtomNo /) )
             
+            ! Write input file for DFTB+
+            CALL WriteDFTBInput( LocalDir, PBC, UnitVectors, AtomNo, AtomTypeString, AtomicPositions, AtomTypes, ReadFileContent  )
+
+            ! Run calculation with DFTB+
+            CALL EXECUTE_COMMAND_LINE( "cd "//TRIM(ADJUSTL(LocalDir))//"; dftb+ > log" )
+
+            PRINT*, "HERE THE PROGRAM IS HALTED !!!!!"
+            CALL MyMPI_Finalize()
+            STOP
+            
+            ! Read potential and forces from output file
+
       END SELECT
 
    END FUNCTION GetPotential
@@ -842,6 +990,36 @@ MODULE PotentialModule
       END SELECT
 
    END FUNCTION AtomicLabel
+
+
+   FUNCTION AtomicLabelToNumber( AtomicLabel ) RESULT( AtomicNumber )
+      IMPLICIT NONE
+      INTEGER                  :: AtomicNumber
+      CHARACTER(3), INTENT(IN) :: AtomicLabel
+      CHARACTER(100)           :: ErrorMsg
+      INTEGER   ::  i 
+
+      CHARACTER(3), PARAMETER, DIMENSION(18) :: &
+      Labels =  (/ "H  ", "He ", "Li ", "Be ", "B  ", "C  ", "N  ", "O  ", "F  ", "Ne ", "Na ", "Mg ", "Al ", &
+                   "Si ", "P  ", "S  ", "Cl ", "Ar " /)
+      INTEGER, PARAMETER, DIMENSION(18) :: &
+      Numbers = (/ (i, i=1, 18 ) /)
+
+      i = 0
+      DO 
+         i = i + 1
+         IF ( i > SIZE(Labels) ) THEN
+            WRITE( ErrorMsg, * ) " AtomicLabel: atomic label ",AtomicLabel," is not available "
+            CALL AbortWithError( ErrorMsg )
+         END IF
+         IF ( TRIM(ADJUSTL(AtomicLabel)) == TRIM(ADJUSTL(Labels(i))) ) THEN
+            AtomicNumber = Numbers(i)
+            EXIT
+         END IF
+      END DO
+
+   END FUNCTION AtomicLabelToNumber
+
 
 
    FUNCTION AtomicMass( AtomicNumber )

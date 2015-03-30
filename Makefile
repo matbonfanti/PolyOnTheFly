@@ -460,6 +460,9 @@ ${OBJDIR}/RandomNumberGenerator.o : ${SRCDIR}/RandomNumberGenerator.f90         
 # Module containing the common data (v3)
 ${OBJDIR}/SharedData.o            : ${SRCDIR}/SharedData.f90 ${OBJDIR}/ClassicalEqMotion.o                         ${COMMONDEP}
 
+# Module with DFTB+ wrapper subroutines 
+${OBJDIR}/DFTBWrapper.o           : ${SRCDIR}/DFTBWrapper.f90 ${OBJDIR}/UnitConversion.o                           ${COMMONDEP}
+
 # Writing molecular trajectory in VTF format 
 ${OBJDIR}/VTFFileModule.o         : ${SRCDIR}/VTFFileModule.f90                                                    ${COMMONDEP}
 
@@ -473,7 +476,7 @@ ${OBJDIR}/ClassicalEqMotion.o     : ${SRCDIR}/ClassicalEqMotion.f90 ${OBJDIR}/Ra
 # Module containing the potential energy surface
 ${OBJDIR}/PotentialModule.o       : ${SRCDIR}/PotentialModule.f90 ${OBJDIR}/RandomNumberGenerator.o \
                                     ${OBJDIR}/MyLinearAlgebra.o ${OBJDIR}/PeriodicBoundary.o        \
-                                    ${OBJDIR}/fsiesta.o ${OBJDIR}/InputField.o                                     ${COMMONDEP}
+                                    ${OBJDIR}/fsiesta.o ${OBJDIR}/InputField.o ${OBJDIR}/DFTBWrapper.o             ${COMMONDEP}
 
 # Module containing the subroutines to write output to files
 ${OBJDIR}/OutputModule.o          : ${SRCDIR}/OutputModule.f90 ${OBJDIR}/SharedData.o ${OBJDIR}/VTFFileModule.o \

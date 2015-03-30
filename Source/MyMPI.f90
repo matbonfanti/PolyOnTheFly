@@ -44,7 +44,7 @@ MODULE MyMPI
    INTERFACE MyMPI_BroadcastToSlaves
      MODULE PROCEDURE MyMPI_BroadcastToSlaves_RA, MyMPI_BroadcastToSlaves_RS, & 
                       MyMPI_BroadcastToSlaves_IS, MyMPI_BroadcastToSlaves_LS, &
-                      MyMPI_BroadcastToSlaves_IA
+                      MyMPI_BroadcastToSlaves_IA, MyMPI_BroadcastToSlaves_SA
    END INTERFACE
 
 
@@ -222,6 +222,19 @@ MODULE MyMPI
 
    END SUBROUTINE MyMPI_BroadcastToSlaves_LS
 
+   SUBROUTINE MyMPI_BroadcastToSlaves_SA( Array )
+      IMPLICIT NONE
+      CHARACTER(*), DIMENSION(:), INTENT(INOUT) :: Array
+      INTEGER :: i
+      ! INSERT HERE THE CHECK ON THE MODULE STATUS
+
+#if defined(WITH_MPI)
+      DO i = 1, SIZE(Array)
+         CALL MPI_BCAST( Array(i), LEN(Array(i)), MPI_CHARACTER, 0, MPI_COMM_WORLD, err)
+      END DO
+#endif
+
+   END SUBROUTINE MyMPI_BroadcastToSlaves_SA
 
 END MODULE MyMPI
 
