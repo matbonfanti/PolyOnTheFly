@@ -16,7 +16,7 @@
 !
 !>  \par Updates
 !>  \arg 31 March 2015 :  implemented for each trajectory velocity distribution analysis
-!>                        with a kinetic energy binning
+!>                        with a velocity binning
 !
 !>  \todo          ____________________________
 !>                 
@@ -33,7 +33,7 @@ MODULE OutputModule
    ! A) SINGLE TRAJECTORY FILES ( 1 file per each trajectory )
    !    1) VTF trajectory file (trajectory snapshots in VTF format, using VTFFileModule)
    !    2) Total energy file (istantaneous value of kin, pot, total energy and temperature of the trajectory)
-   !    3) Kinetic energy distribution of each degree of freedom and of the degrees alltogether
+   !    3) Velocity distribution of each degree of freedom and of the degrees alltogether
 
    ! B) AVERAGE VALUE FILES ( 1 file per each simulation )
    !    1) 
@@ -91,7 +91,7 @@ MODULE OutputModule
    INTEGER :: TrajRingPolymerEnergyUnit
    INTEGER :: TrajCentroidXUnit
    INTEGER :: TrajCentroidVUnit
-   INTEGER :: TrajKinEDistrUnit
+   INTEGER :: TrajVelDistrUnit
 
    ! OUTPUT UNITS for equilibration averages output
    INTEGER :: EquilTotEnergyUnit
@@ -114,7 +114,7 @@ MODULE OutputModule
    TYPE( VTFFile ), SAVE :: TrajectoryVTF
 
    !> Memory to store single trajectory output
-   INTEGER, DIMENSION(:,:,:), ALLOCATABLE, SAVE :: ParticleKinEBinning
+   INTEGER, DIMENSION(:,:,:), ALLOCATABLE, SAVE :: ParticleVelBinning
 
    !> Memory to store equilibration averages
    REAL, DIMENSION(:), ALLOCATABLE :: EquilKinEnergy, EquilPotEnergy
@@ -193,11 +193,11 @@ MODULE OutputModule
             nEquilDyn = 1
             NrOfSteps(:) = 0
 
-            ! Kinetic energy binning
-            IF ( Out_KinDistrib ) THEN
+            ! Velocity binning
+            IF ( Out_VelDistrib ) THEN
                ! Allocate memory and initialize array
-               ALLOCATE( ParticleKinEBinning( NDim, Out_KinDistrib_nE, 2 ) )
-               ParticleKinEBinning = 0
+               ALLOCATE( ParticleVelBinning( NDim, Out_VelDistrib_nV, 2 ) )
+               ParticleVelBinning = 0
             END IF
 
             ! Now update status variable
@@ -234,11 +234,11 @@ MODULE OutputModule
             END IF
 
             ! Increment array for the kinetic energy binning
-            IF ( Out_KinDistrib ) THEN
+            IF ( Out_VelDistrib ) THEN
                DO i = 1, NDim
-                  IF ( KinPerCoord(i) < Out_KinDistrib_nE*Out_KinDistrib_DE ) THEN
-                     j = FLOOR( KinPerCoord(i)/Out_KinDistrib_DE )+1
-                     ParticleKinEBinning( i, j, nEquilDyn ) = ParticleKinEBinning( i, j, nEquilDyn ) + 1
+                  IF ( ABS(CentroidVel(i)) < Out_VelDistrib_nV*Out_VelDistrib_DV ) THEN
+                     j = FLOOR( ABS(CentroidVel(i))/Out_VelDistrib_DV )+1
+                     ParticleVelBinning( i, j, nEquilDyn ) = ParticleVelBinning( i, j, nEquilDyn ) + 1
                   END IF
                END DO
             END IF
@@ -262,35 +262,39 @@ MODULE OutputModule
             IF ( NBeads > 1 )  CLOSE( UNIT=TrajRingPolymerEnergyUnit )
 
             ! Write kinetic energy binning to output file
-            IF ( Out_KinDistrib ) THEN
+            IF ( Out_VelDistrib ) THEN
                ! Open unit to write kin energy distribution
-               TrajKinEDistrUnit = LookForFreeUnit()
-               WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_KinEDistib.dat"
-               OPEN( FILE=OutFileName, UNIT=TrajKinEDistrUnit )
+               TrajVelDistrUnit = LookForFreeUnit()
+               WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_VelDistrib.dat"
+               OPEN( FILE=OutFileName, UNIT=TrajVelDistrUnit )
                ! Write particle distribution during equilibration
-               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pdof vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
-               DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), & 
-                                               REAL(ParticleKinEBinning(:,i,1))/REAL(NrOfSteps(1))
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pdof vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
+                                        trim(TimeUnit(InputUnits)) // ") - equil # ", iTraj
+               DO i = 1, Out_VelDistrib_nV
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
+                          /TimeConversion(InternalUnits,InputUnits), REAL(ParticleVelBinning(:,i,1))/REAL(NrOfSteps(1))
                END DO
-               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pdof vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
-               DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), & 
-                                               REAL(ParticleKinEBinning(:,i,2))/REAL(NrOfSteps(2))
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pdof vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
+                                        trim(TimeUnit(InputUnits)) // ") - dyn # ", iTraj               
+               DO i = 1, Out_VelDistrib_nV
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
+                          /TimeConversion(InternalUnits,InputUnits), REAL(ParticleVelBinning(:,i,2))/REAL(NrOfSteps(2))
                END DO
-               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
-               DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), &
-                                                            REAL(SUM(ParticleKinEBinning(:,i,1)))/REAL(NrOfSteps(1)*NDim)
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pfull vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
+                                        trim(TimeUnit(InputUnits)) // ") - equil # ", iTraj               
+               DO i = 1, Out_VelDistrib_nV
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
+                          /TimeConversion(InternalUnits,InputUnits), REAL(SUM(ParticleVelBinning(:,i,1)))/REAL(NrOfSteps(1)*NDim)
                END DO
-               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
-               DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), &
-                                                            REAL(SUM(ParticleKinEBinning(:,i,2)))/REAL(NrOfSteps(2)*NDim)
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pfull vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
+                                        trim(TimeUnit(InputUnits)) // ") - dyn # ", iTraj               
+               DO i = 1, Out_VelDistrib_nV
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
+                          /TimeConversion(InternalUnits,InputUnits), REAL(SUM(ParticleVelBinning(:,i,2)))/REAL(NrOfSteps(2)*NDim)
                END DO
             END IF
-            CLOSE( TrajKinEDistrUnit )
-            DEALLOCATE( ParticleKinEBinning )
+            CLOSE( TrajVelDistrUnit )
+            DEALLOCATE( ParticleVelBinning )
 
             ! Now update status variable
             WritingCurrentTrajectory = .FALSE.
