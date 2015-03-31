@@ -19,6 +19,7 @@
 !>                        for MPI application has been added
 !>  \arg 8 November 2014: SetNearTranslations has been moved to PBC Module,
 !>                        new subs to query the PBC defined in the potential module
+!>  \arg 31 March 2015:   on-the-fly forces coming from DFTB+ calcualtion
 !
 !>  \todo          \arg logging of input and setup subroutines
 !>                 \arg SIESTA: run calculation in different dir
