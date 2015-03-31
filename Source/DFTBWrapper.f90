@@ -189,6 +189,9 @@ MODULE DFTBWrapper
 
       INTEGER :: OutputUnit, i
 
+      ! Set units for DFTB+
+      CALL Initialize_UnitConversion( DFTBUnits, UNITS_ANGSTROM, UNITS_EV, UNITS_AMU, UNITS_DEGREE, UNITS_FEMTOS, &
+                                                            UNITS_KELVIN, UNITS_CMMINUS1 )
       ! Open output unit
       OutputUnit = LookForFreeUnit()
       OPEN( UNIT=OutputUnit, FILE=TRIM(ADJUSTL(Dir))//"/dftb_in.hsd" )
@@ -200,7 +203,7 @@ MODULE DFTBWrapper
          WRITE(OutputUnit, 300) AtomNo, "C", AtomTypeString
       END IF
       DO i = 1, AtomNo
-         WRITE(OutputUnit, 301) i, AtomTypes(i), AtomicPositions(:,i)
+         WRITE(OutputUnit, 301) i, AtomTypes(i), AtomicPositions(:,i)*LengthConversion(InternalUnits, DFTBUnits)
       END DO
       IF ( PBC ) WRITE(OutputUnit, 302) 0., 0., 0., UnitVectors(1,:), UnitVectors(2,:), UnitVectors(3,:)
       WRITE(OutputUnit, 303)
