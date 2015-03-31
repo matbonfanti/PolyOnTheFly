@@ -80,6 +80,12 @@ MODULE OutputModule
    !> Setup variable for the output of dynamics averages
    INTEGER, SAVE :: DynamicsAveragesStatus = 0
 
+   !> Trajectory output section: equilibration or dynamics
+   INTEGER, SAVE :: nEquilDyn = 0
+
+   !> Nr of steps counter
+   INTEGER, DIMENSION(2), SAVE :: NrOfSteps
+
    ! OUTPUT UNITS for single trajectory output
    INTEGER :: TrajTotEnergyUnit
    INTEGER :: TrajRingPolymerEnergyUnit
@@ -108,7 +114,7 @@ MODULE OutputModule
    TYPE( VTFFile ), SAVE :: TrajectoryVTF
 
    !> Memory to store single trajectory output
-   INTEGER, DIMENSION(:,:,:), ALLOCATABLE :: ParticleKinEBinning
+   INTEGER, DIMENSION(:,:,:), ALLOCATABLE, SAVE :: ParticleKinEBinning
 
    !> Memory to store equilibration averages
    REAL, DIMENSION(:), ALLOCATABLE :: EquilKinEnergy, EquilPotEnergy
@@ -135,10 +141,9 @@ MODULE OutputModule
       INTEGER, INTENT(IN)  ::  Action
       CHARACTER(2), DIMENSION(:), ALLOCATABLE :: AtomsLabels
       LOGICAL, DIMENSION(:,:), ALLOCATABLE :: BondsLogical
-      INTEGER :: i, j, jStart, jEnd, nEquilDyn
+      INTEGER :: i, j, jStart, jEnd
       CHARACTER(50) :: OutFileName
       REAL, DIMENSION(6) :: UnitCellDim
-      INTEGER, DIMENSION(2) :: NrOfSteps
 
       SELECT CASE( Action )
 
@@ -190,8 +195,9 @@ MODULE OutputModule
 
             ! Kinetic energy binning
             IF ( Out_KinDistrib ) THEN
-               ! Allocate memory
+               ! Allocate memory and initialize array
                ALLOCATE( ParticleKinEBinning( NDim, Out_KinDistrib_nE, 2 ) )
+               ParticleKinEBinning = 0
             END IF
 
             ! Now update status variable
@@ -231,8 +237,8 @@ MODULE OutputModule
             IF ( Out_KinDistrib ) THEN
                DO i = 1, NDim
                   IF ( KinPerCoord(i) < Out_KinDistrib_nE*Out_KinDistrib_DE ) THEN
-                     j = CEILING( KinPerCoord(i)/Out_KinDistrib_DE )
-                     ParticleKinEBinning( NDim, j, nEquilDyn ) = ParticleKinEBinning( NDim, j, nEquilDyn ) + 1
+                     j = FLOOR( KinPerCoord(i)/Out_KinDistrib_DE )+1
+                     ParticleKinEBinning( i, j, nEquilDyn ) = ParticleKinEBinning( i, j, nEquilDyn ) + 1
                   END IF
                END DO
             END IF
@@ -262,23 +268,25 @@ MODULE OutputModule
                WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_KinEDistib.dat"
                OPEN( FILE=OutFileName, UNIT=TrajKinEDistrUnit )
                ! Write particle distribution during equilibration
-               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pparticle vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
+               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pdof vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
                DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), REAL(ParticleKinEBinning(:,i,1))/REAL(NrOfSteps(1))
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), & 
+                                               REAL(ParticleKinEBinning(:,i,1))/REAL(NrOfSteps(1))
                END DO
-               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pparticle vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
+               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pdof vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
                DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), REAL(ParticleKinEBinning(:,i,2))/REAL(NrOfSteps(2))
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), & 
+                                               REAL(ParticleKinEBinning(:,i,2))/REAL(NrOfSteps(2))
                END DO
-               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
+               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
                DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), &
-                                                            REAL(SUM(ParticleKinEBinning(:,i,1)))/REAL(NrOfSteps(2)*NDim)
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), &
+                                                            REAL(SUM(ParticleKinEBinning(:,i,1)))/REAL(NrOfSteps(1)*NDim)
                END DO
-               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
+               WRITE(TrajKinEDistrUnit, "(/,A,I6)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
                DO i = 1, Out_KinDistrib_nE
-                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), &
-                                                            REAL(SUM(ParticleKinEBinning(:,i,1)))/REAL(NrOfSteps(2)*NDim)
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5)*EnergyConversion(InternalUnits,InputUnits), &
+                                                            REAL(SUM(ParticleKinEBinning(:,i,2)))/REAL(NrOfSteps(2)*NDim)
                END DO
             END IF
             CLOSE( TrajKinEDistrUnit )
