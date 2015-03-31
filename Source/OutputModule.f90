@@ -15,7 +15,8 @@
 !***************************************************************************************
 !
 !>  \par Updates
-!>  \arg 
+!>  \arg 31 March 2015 :  implemented for each trajectory velocity distribution analysis
+!>                        with a kinetic energy binning
 !
 !>  \todo          ____________________________
 !>                 
@@ -32,6 +33,7 @@ MODULE OutputModule
    ! A) SINGLE TRAJECTORY FILES ( 1 file per each trajectory )
    !    1) VTF trajectory file (trajectory snapshots in VTF format, using VTFFileModule)
    !    2) Total energy file (istantaneous value of kin, pot, total energy and temperature of the trajectory)
+   !    3) Kinetic energy distribution of each degree of freedom and of the degrees alltogether
 
    ! B) AVERAGE VALUE FILES ( 1 file per each simulation )
    !    1) 
@@ -83,6 +85,7 @@ MODULE OutputModule
    INTEGER :: TrajRingPolymerEnergyUnit
    INTEGER :: TrajCentroidXUnit
    INTEGER :: TrajCentroidVUnit
+   INTEGER :: TrajKinEDistrUnit
 
    ! OUTPUT UNITS for equilibration averages output
    INTEGER :: EquilTotEnergyUnit
@@ -103,6 +106,9 @@ MODULE OutputModule
 
    !> Object to write VTF trajectory file
    TYPE( VTFFile ), SAVE :: TrajectoryVTF
+
+   !> Memory to store single trajectory output
+   INTEGER, DIMENSION(:,:,:), ALLOCATABLE :: ParticleKinEBinning
 
    !> Memory to store equilibration averages
    REAL, DIMENSION(:), ALLOCATABLE :: EquilKinEnergy, EquilPotEnergy
@@ -129,9 +135,10 @@ MODULE OutputModule
       INTEGER, INTENT(IN)  ::  Action
       CHARACTER(2), DIMENSION(:), ALLOCATABLE :: AtomsLabels
       LOGICAL, DIMENSION(:,:), ALLOCATABLE :: BondsLogical
-      INTEGER :: i, j, jStart, jEnd
+      INTEGER :: i, j, jStart, jEnd, nEquilDyn
       CHARACTER(50) :: OutFileName
       REAL, DIMENSION(6) :: UnitCellDim
+      INTEGER, DIMENSION(2) :: NrOfSteps
 
       SELECT CASE( Action )
 
@@ -177,6 +184,16 @@ MODULE OutputModule
                WRITE(TrajRingPolymerEnergyUnit, "(A)") "# Langevin equilibration "
             END IF
 
+            ! Integer variable to check actual section of the calculation (equilibration / dynamics )
+            nEquilDyn = 1
+            NrOfSteps(:) = 0
+
+            ! Kinetic energy binning
+            IF ( Out_KinDistrib ) THEN
+               ! Allocate memory
+               ALLOCATE( ParticleKinEBinning( NDim, Out_KinDistrib_nE, 2 ) )
+            END IF
+
             ! Now update status variable
             WritingCurrentTrajectory = .TRUE.
 
@@ -210,6 +227,19 @@ MODULE OutputModule
                            2.0*RPKinEnergy/NDim/NBeads*TemperatureConversion(InternalUnits, InputUnits)
             END IF
 
+            ! Increment array for the kinetic energy binning
+            IF ( Out_KinDistrib ) THEN
+               DO i = 1, NDim
+                  IF ( KinPerCoord(i) < Out_KinDistrib_nE*Out_KinDistrib_DE ) THEN
+                     j = CEILING( KinPerCoord(i)/Out_KinDistrib_DE )
+                     ParticleKinEBinning( NDim, j, nEquilDyn ) = ParticleKinEBinning( NDim, j, nEquilDyn ) + 1
+                  END IF
+               END DO
+            END IF
+
+            ! Increment nr of steps of current section
+            NrOfSteps(nEquilDyn) = NrOfSteps(nEquilDyn) + 1
+
 !******************************************************************************************************
          CASE(CLOSE_OUTPUT)
 !******************************************************************************************************
@@ -225,12 +255,44 @@ MODULE OutputModule
             CLOSE( UNIT=TrajTotEnergyUnit )
             IF ( NBeads > 1 )  CLOSE( UNIT=TrajRingPolymerEnergyUnit )
 
+            ! Write kinetic energy binning to output file
+            IF ( Out_KinDistrib ) THEN
+               ! Open unit to write kin energy distribution
+               TrajKinEDistrUnit = LookForFreeUnit()
+               WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_KinEDistib.dat"
+               OPEN( FILE=OutFileName, UNIT=TrajKinEDistrUnit )
+               ! Write particle distribution during equilibration
+               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pparticle vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
+               DO i = 1, Out_KinDistrib_nE
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), REAL(ParticleKinEBinning(:,i,1))/REAL(NrOfSteps(1))
+               END DO
+               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pparticle vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
+               DO i = 1, Out_KinDistrib_nE
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), REAL(ParticleKinEBinning(:,i,2))/REAL(NrOfSteps(2))
+               END DO
+               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - equil # ", iTraj
+               DO i = 1, Out_KinDistrib_nE
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), &
+                                                            REAL(SUM(ParticleKinEBinning(:,i,1)))/REAL(NrOfSteps(2)*NDim)
+               END DO
+               WRITE(TrajKinEDistrUnit, "(A,I6,/)") "# Pfull vs KinE (" // trim(EnergyUnit(InputUnits)) // ") - dyn # ", iTraj
+               DO i = 1, Out_KinDistrib_nE
+                  WRITE(TrajKinEDistrUnit,801) Out_KinDistrib_DE*REAL(i-0.5), &
+                                                            REAL(SUM(ParticleKinEBinning(:,i,1)))/REAL(NrOfSteps(2)*NDim)
+               END DO
+            END IF
+            CLOSE( TrajKinEDistrUnit )
+            DEALLOCATE( ParticleKinEBinning )
+
             ! Now update status variable
             WritingCurrentTrajectory = .FALSE.
 
 !******************************************************************************************************
          CASE(DIVIDE_EQ_DYN)
 !******************************************************************************************************
+
+            ! Go from the equil section to the dynamics one
+            nEquilDyn = 2
 
             ! Check if current trajectory output has correct status
             CALL ERROR( .NOT. WritingCurrentTrajectory, &
@@ -245,6 +307,7 @@ MODULE OutputModule
 
       ! Format for output printing
       800 FORMAT( 1F12.5,4(1F15.8,1X) )
+      801 FORMAT( 1F12.5,1000(1F8.4,1X) )
 
    END SUBROUTINE SingleTrajectoryOutput
 

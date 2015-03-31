@@ -67,6 +67,11 @@ MODULE SharedData
    ! Internal state of the random number generator
    TYPE(RNGInternalState), SAVE :: RandomNr       !< Internal state of the random number generator
 
+   ! Control additional output 
+   LOGICAL, SAVE :: Out_KinDistrib        !< Print kinetic energy distribution for each trajectory
+   INTEGER, SAVE :: Out_KinDistrib_nE     !< Number of intervals of the kinetic energy binning
+   REAL, SAVE    :: Out_KinDistrib_DE     !< Energy interval of the kinetic energy binning
+
 !    ! Averages computed during propagation
 !    REAL, DIMENSION(:), ALLOCATABLE      :: PositionCorrelation       !< Position correlation function
 !    REAL, DIMENSION(:,:), ALLOCATABLE    :: AverageCoord              !< Average i-th coordinate vs time

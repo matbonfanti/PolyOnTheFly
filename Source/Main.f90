@@ -415,6 +415,15 @@ PROGRAM PolyOnTheFly
       ! Set propagation time
       CALL SetFieldFromInput( InputData, "DynamicsTotalTime", DynamicsTotalTime )
 
+      ! READ THE VARIABLES FOR THE ANALYSIS
+
+      ! Kinetic energy distribution
+      CALL SetFieldFromInput( InputData, "Out_KinDistrib", Out_KinDistrib, .FALSE. )
+      IF ( Out_KinDistrib ) THEN
+         CALL SetFieldFromInput( InputData, "Out_KinDistrib_nE", Out_KinDistrib_nE )
+         CALL SetFieldFromInput( InputData, "Out_KinDistrib_DE", Out_KinDistrib_DE )
+      END IF
+
    END SUBROUTINE Input
 
    ! ===================================================================================================
@@ -447,6 +456,11 @@ PROGRAM PolyOnTheFly
       BeadsFrequency = NBeads * Temperature
       BeadsForceConst = ( NBeads * Temperature )**2
            
+      ! Variables for the kinetic energy binning
+      IF ( Out_KinDistrib ) THEN
+         Out_KinDistrib_DE = Out_KinDistrib_DE * EnergyConversion(InputUnits, InternalUnits)
+      END IF
+
    END SUBROUTINE ConvertUnitsAndProcessData
 
    ! ===================================================================================================
@@ -472,7 +486,14 @@ PROGRAM PolyOnTheFly
       CALL MyMPI_BroadcastToSlaves( EquilPrintStepInterval )
       CALL MyMPI_BroadcastToSlaves( BeadsFrequency )
       CALL MyMPI_BroadcastToSlaves( BeadsForceConst )
-          
+
+      ! Variables for the kinetic energy binning
+      CALL MyMPI_BroadcastToSlaves( Out_KinDistrib )
+      IF ( Out_KinDistrib ) THEN
+         CALL MyMPI_BroadcastToSlaves( Out_KinDistrib_nE )
+         CALL MyMPI_BroadcastToSlaves( Out_KinDistrib_DE )
+      END IF
+
    END SUBROUTINE SyncroDataAcrossNodes
 
    ! ===================================================================================================
