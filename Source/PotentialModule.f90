@@ -786,11 +786,11 @@ MODULE PotentialModule
             ! Run calculation with DFTB+
             CALL EXECUTE_COMMAND_LINE( "cd "//TRIM(ADJUSTL(LocalDir))//"; dftb+ > log" )
 
-            PRINT*, "HERE THE PROGRAM IS HALTED !!!!!"
-            CALL MyMPI_Finalize()
-            STOP
-            
-            ! Read potential and forces from output file
+            ! Read forces from DFTB+ output file
+            CALL ReadDFTBForces( LocalDir, AtomNo, PBC, GetPotential, TmpForces, Stress )
+
+            ! Copy forces in vector format 
+            Force = RESHAPE( TmpForces, (/ 3*AtomNo /) )
 
       END SELECT
 

@@ -26,7 +26,7 @@ MODULE DFTBWrapper
 
    PRIVATE
 
-   PUBLIC :: DFTBInputParser, WriteDFTBInput
+   PUBLIC :: DFTBInputParser, WriteDFTBInput, ReadDFTBForces
 
    TYPE(Units), SAVE     :: DFTBUnits     !< Units definition for DFTB+
 
@@ -222,7 +222,8 @@ MODULE DFTBWrapper
       302 FORMAT( 3F20.8, /, 3F20.8, /, 3F20.8, /, 3F20.8 )
       303 FORMAT( " } ")
 
-      400 FORMAT( " Options = { ", /, "    CalculateForces = Yes ", /, " } " )
+      400 FORMAT( " Options = { ", /, "    CalculateForces = Yes ", /, &
+                                      "    WriteBandOut    = No ", /, " } " )
 
 
    END SUBROUTINE WriteDFTBInput
@@ -230,8 +231,66 @@ MODULE DFTBWrapper
 ! ================================================================================================================
 
 
-SUBROUTINE ReadDFTBForces()
+   SUBROUTINE ReadDFTBForces( Dir, NAtoms, PBC, Energy, AtomForces, LatticeDerivs )
+      IMPLICIT NONE
+      CHARACTER(*), INTENT(IN)                :: Dir
+      INTEGER, INTENT(IN)                     :: NAtoms
+      LOGICAL, INTENT(IN)                     :: PBC
+      REAL, INTENT(OUT)                       :: Energy
+      REAL, DIMENSION(3,NAtoms), INTENT(OUT)  :: AtomForces
+      REAL, DIMENSION(3,3), INTENT(OUT)       :: LatticeDerivs
+      
+      CHARACTER(120) :: Line
+      CHARACTER(36) :: String
+      INTEGER :: OutputUnit, i
 
-END SUBROUTINE ReadDFTBForces
+      ! Open output unit
+      OutputUnit = LookForFreeUnit()
+      OPEN( UNIT=OutputUnit, FILE=TRIM(ADJUSTL(Dir))//"/detailed.out" )
+
+      ! Cycle over the lines of the detailed.out file
+      DO 
+         READ(OutputUnit,"(A120)") Line
+
+         ! When "Total energy:" is encountered, store energy
+         IF ( TRIM(ADJUSTL(Line(1:30)) ) == "Total energy:" ) THEN
+            READ(Line,"(A36,F14.10)") String, Energy
+            CYCLE
+         END IF
+
+         ! When "Total Forces" label is encountered, start reading atomic forces
+         IF ( TRIM(ADJUSTL(Line) ) == "Total Forces" ) THEN
+
+            ! Read atomic forces
+            DO i = 1, NAtoms
+               READ(OutputUnit,*) AtomForces(:,i)
+            END DO
+
+            IF ( PBC ) THEN
+               ! Skip lines
+               DO i = 1, 7
+                  READ(OutputUnit,*) 
+               END DO
+
+               ! Read derivatives with respect to lattice dimensions
+               DO i = 1, 3
+                  READ(OutputUnit,*) LatticeDerivs(i,:)
+               END DO
+
+            ELSE
+               ! Set lattice derivs to zero
+               LatticeDerivs = 0.0
+            END IF
+
+            ! Stop reading file
+            EXIT
+         END IF
+
+      END DO
+
+      ! Close unit
+      CLOSE( OutputUnit )
+
+   END SUBROUTINE ReadDFTBForces
 
 END MODULE DFTBWrapper
