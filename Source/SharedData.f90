@@ -26,9 +26,6 @@ MODULE SharedData
 !=============================================================================================================
 
    ! VARIABLES SET FROM INPUT
-   
-!    !> Gamma of the relaxation during dynamics (its meaning depends on the bath representation)
-!    REAL    :: DynamicsGamma             
 
    ! variables of the ring polymer dynamics 
    INTEGER :: NBeads                    !< Nr of replicas of the system + bath 
@@ -72,12 +69,6 @@ MODULE SharedData
    INTEGER, SAVE :: Out_VelDistrib_nV     !< Number of intervals of the kinetic energy binning
    REAL, SAVE    :: Out_VelDistrib_DV     !< Energy interval of the kinetic energy binning
 
-!    ! Averages computed during propagation
-!    REAL, DIMENSION(:), ALLOCATABLE      :: PositionCorrelation       !< Position correlation function
-!    REAL, DIMENSION(:,:), ALLOCATABLE    :: AverageCoord              !< Average i-th coordinate vs time
-!    INTEGER, PARAMETER                   :: NrOfEnergyAverages = 5    !< Nr of average values computed by the function EnergyAverages
-!    REAL, DIMENSION(:,:), ALLOCATABLE    :: AverageE                  !< Traj averages of the energy in time
-
    
 !=============================================================================================================
 
@@ -119,69 +110,5 @@ MODULE SharedData
    REAL, DIMENSION(:), ALLOCATABLE :: CentroidVel  !< Velocity of the centroid of the RP
 
 !=============================================================================================================
-
-
-! CONTAINS
-
-!    !> Variable to define which kind of calculation is required 
-!    INTEGER :: RunType
-!    INTEGER, PARAMETER :: EQUILIBRIUM     = 1,  & ! Equilibrium calculation with H already adsorbed
-!                          HARMONICMODEL   = 2,  & ! Test the parameters with a 1D harmonic model 
-!                          RELAXATION      = 3,  & ! Relaxation dynamics of a CH bound state, with the bath at 0K
-!                          SCATTERING      = 4,  & ! Scattering calculation with H coming from gas-phase
-!                          RPMD_RELAXATION = 5,  & ! Relaxation dynamics with RING POLYMER DYNAMICS
-!                          RPMD_EQUILIBRIUM = 6,  & ! Equilibrium simulation with Ring Polymer MD
-!                          POTENTIALPRINT  = 10    ! Static analysis of the potential 
-! 
-!    !> Variable to set the print level of the calculation
-!    INTEGER :: PrintType
-!    INTEGER, PARAMETER :: DEBUG       = 3, &   ! fully detailed information about the trajs
-!                          FULL        = 2, &   ! files to plot the make animations, averages for each traj
-!                          MINIMAL     = 1      ! minimal level of output, only final averages
-! 
-! 
-
-
-!    !> Subroutine to check the availability of a given runtype option
-!    SUBROUTINE CheckRunType( IntNr )
-!       IMPLICIT NONE
-!       INTEGER, INTENT(IN) :: IntNr
-!       LOGICAL :: Check 
-! 
-!       Check = ( IntNr /= EQUILIBRIUM .AND. &
-!                 IntNr /= HARMONICMODEL .AND. &
-!                 IntNr /= RELAXATION .AND. &
-!                 IntNr /= SCATTERING .AND. &
-!                 IntNr /= RPMD_RELAXATION .AND. &
-!                 IntNr /= RPMD_EQUILIBRIUM .AND. &
-!                 IntNr /= POTENTIALPRINT )
-!       CALL ERROR( Check, " SharedData.CheckRunType: Invalid RunType option " )
-!    END SUBROUTINE CheckRunType
-! 
-!    !> Subroutine to check the availability of a given printtype option
-!    SUBROUTINE CheckPrintType( IntNr )
-!       IMPLICIT NONE
-!       INTEGER, INTENT(IN) :: IntNr
-!       LOGICAL :: Check 
-! 
-!       Check = ( IntNr /= DEBUG .AND. &
-!                 IntNr /= FULL .AND. &
-!                 IntNr /= MINIMAL  )
-!       CALL ERROR( Check, " SharedData.CheckPrintType: Invalid PrintType option " )
-!    END SUBROUTINE CheckPrintType
-! 
-!    !> Subroutine to check the availability of a given printtype option
-!    SUBROUTINE CheckBathType( IntNr )
-!       IMPLICIT NONE
-!       INTEGER, INTENT(IN) :: IntNr
-!       LOGICAL :: Check 
-! 
-!       Check = ( IntNr /= SLAB_POTENTIAL .AND. &
-!                 IntNr /= NORMAL_BATH .AND. &
-!                 IntNr /= CHAIN_BATH .AND. &
-!                 IntNr /= DOUBLE_CHAIN .AND. &
-!                 IntNr /= LANGEVIN_DYN  )
-!       CALL ERROR( Check, " SharedData.CheckBathType: Invalid BathType option " )
-!    END SUBROUTINE CheckBathType
 
 END MODULE SharedData

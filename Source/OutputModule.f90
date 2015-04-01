@@ -268,29 +268,25 @@ MODULE OutputModule
                WRITE(OutFileName,"(A,I4.4,A)") "Traj_",iTraj,"_VelDistrib.dat"
                OPEN( FILE=OutFileName, UNIT=TrajVelDistrUnit )
                ! Write particle distribution during equilibration
-               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pdof vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
-                                        trim(TimeUnit(InputUnits)) // ") - equil # ", iTraj
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pdof vs v (" // trim(VelocityUnit(InputUnits)) // ") - equil # ", iTraj
                DO i = 1, Out_VelDistrib_nV
-                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
-                          /TimeConversion(InternalUnits,InputUnits), REAL(ParticleVelBinning(:,i,1))/REAL(NrOfSteps(1))
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*VelocityConversion(InternalUnits,InputUnits),  &
+                                                           REAL(ParticleVelBinning(:,i,1))/REAL(NrOfSteps(1))
                END DO
-               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pdof vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
-                                        trim(TimeUnit(InputUnits)) // ") - dyn # ", iTraj               
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pdof vs v (" // trim(VelocityUnit(InputUnits)) // ") - dyn # ", iTraj         
                DO i = 1, Out_VelDistrib_nV
-                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
-                          /TimeConversion(InternalUnits,InputUnits), REAL(ParticleVelBinning(:,i,2))/REAL(NrOfSteps(2))
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*VelocityConversion(InternalUnits,InputUnits),  &
+                                                           REAL(ParticleVelBinning(:,i,2))/REAL(NrOfSteps(2))
                END DO
-               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pfull vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
-                                        trim(TimeUnit(InputUnits)) // ") - equil # ", iTraj               
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pfull vs v (" // trim(VelocityUnit(InputUnits)) // ") - equil # ", iTraj       
                DO i = 1, Out_VelDistrib_nV
-                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
-                          /TimeConversion(InternalUnits,InputUnits), REAL(SUM(ParticleVelBinning(:,i,1)))/REAL(NrOfSteps(1)*NDim)
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*VelocityConversion(InternalUnits,InputUnits),  &
+                                                           REAL(SUM(ParticleVelBinning(:,i,1)))/REAL(NrOfSteps(1)*NDim)
                END DO
-               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pfull vs v (" // trim(LengthUnit(InputUnits)) // " / " // &
-                                        trim(TimeUnit(InputUnits)) // ") - dyn # ", iTraj               
+               WRITE(TrajVelDistrUnit, "(/,A,I6)") "# Pfull vs v (" // trim(VelocityUnit(InputUnits)) // ") - dyn # ", iTraj        
                DO i = 1, Out_VelDistrib_nV
-                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*LengthConversion(InternalUnits,InputUnits)  &
-                          /TimeConversion(InternalUnits,InputUnits), REAL(SUM(ParticleVelBinning(:,i,2)))/REAL(NrOfSteps(2)*NDim)
+                  WRITE(TrajVelDistrUnit,801) Out_VelDistrib_DV*REAL(i-0.5)*VelocityConversion(InternalUnits,InputUnits),  &
+                                                           REAL(SUM(ParticleVelBinning(:,i,2)))/REAL(NrOfSteps(2)*NDim)
                END DO
             END IF
             CLOSE( TrajVelDistrUnit )
