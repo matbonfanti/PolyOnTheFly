@@ -1,0 +1,8 @@
+title: Polyonthefly
+description: General Ring Polymer Molecular Dynamics (RPMD) code
+google_analytics: 
+show_downloads: true
+theme: jekyll-theme-architect
+
+gems:
+  - jekyll-mentions
